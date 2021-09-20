@@ -23,14 +23,12 @@ int skewed=0;
 
 int max_loop=2;    //num of trials
 int load_factor=95;    //load factor
-int AS=32;
 int A=0;
-//int npf=1000;
-int npf=10;
-int bhs=0;
+int bhs=1;
+
+int total_pairs = 1; 
 
 int64_t tot_access=0;
-int64_t tot_FF_FP=0;
 
 map<int64_t,int> S_map;
 map<int64_t,int> A_map;
@@ -124,6 +122,8 @@ class ACF
                         if (fingerprint(key, ii, fbhs) == pFF[i][p].second) {
                     		int64_t key1= cuckoo->get_key(i,0,p);
 				if (key != key1){ // False positive . Check and swap should be in a different thread.
+						  // Notice that it may be a true positive in other of the ways
+						  // Or false positive in more than one
 					// SWAP
 		    			if (skew>0) 
 						pFF[i][p].first= (pFF[i][p].first +1) %((1<<bhs)+1);
@@ -211,13 +211,7 @@ int run()
 //
         int num_fails=0;
         int64_t tot_i=(load_factor*acf_cuckoo.get_size())/100;
-        int64_t num_swap=0;
-	int64_t num_iter=0;
-	int64_t max_FF_FP=0;
-	int64_t min_FF_FP=INT_MAX;
-	int64_t tot_count=0;
         for (int loop=0; loop<max_loop; loop++) {
-            int64_t sample_FF_FP=0;
             S_map.clear();
             A_map.clear();
             A_ar.clear();
@@ -272,15 +266,30 @@ int run()
                 }
             }
             printf("1st Consistency B passed\n");
-            //create A set
+
+            //create and test the A set
             for (int64_t i = 0;  i <A; i++) {
                 unsigned int key = (unsigned int) dis(gen);
-                if ((A_map.count(key) > 0) || (S_map.count(key) > 0)) 
+		// The attacker only knows about A, not about S
+                if (A_map.count(key) > 0)
                 {
                     i--;
                     continue;
                 }
 
+		bool false_positive = false;
+		if(acf_cuckoo.check(key)){ //A positive is returned. Check if we can identify a false positive
+			if(!acf_cuckoo.check(key)){ //False positive detected
+				false_positive = true;
+			}
+		}
+		if(!false_positive){
+		    i--;
+                    continue;
+		}
+                if (S_map.count(key) > 0){
+			printf("Consistency check failed, true positive detected %u\n", key);
+		}
                 //insert in A_map and in A_ar 
                 A_map[key] = line++;
 		A_ar.push_back(key);
@@ -290,43 +299,80 @@ int run()
 			if(!quiet) fprintf(stderr, "loop: %d. Create the A set: %lu\r", loop, i);
                 }
             }
+            int64_t ar_size=A_ar.size();
+
+	    int total_found = 0; 
+            pair<int,int>* attack_set = new pair<int,int>[total_pairs];
+            for(int64_t first=0; first<A-1; first++){ //Take the first element and look for a swapping pair
+		unsigned int key = A_ar[first];
+		
+		while(acf_cuckoo.check(key)){} // Force the swap if it is not already done for this element
+
+            	for(int64_t second=first+1; second<A; second++){ //Take the first element and look for a swapping pair
+			unsigned int key2 = A_ar[second];
+			if(!acf_cuckoo.check(key2)){ // If it does not produce a FP, go to the next element
+				continue;
+			}
+			if(acf_cuckoo.check(key)){ // If it is a pair, it will produce a FP for the first key after swapping
+			        printf("Pair found: %u, %u\n", key2, key);
+				attack_set[total_found]=make_pair(key2,key);
+				total_found++;
+				break;
+			}
+		}
+
+		if (total_found>=total_pairs){
+			break;
+		}
+	    }
+
+
+	    // Validation of the pairs of false positives
+            for (int idx=0; idx<total_found; idx++){
+		int key1 = attack_set[idx].first;
+		int key2 = attack_set[idx].second;
+		
+		bool validation = true;
+
+		while(acf_cuckoo.check(key2)){} // While Just in case key2 is FP in more than 1 way
+
+		if(!acf_cuckoo.check(key1)){
+			validation = false;
+			printf("Key: %u did not produce a positive after swapping key %u. \n", key1, key2);
+		} 
+
+		while(acf_cuckoo.check(key1)){} // While Just in case key1 is FP in more than 1 way
+
+		if(!acf_cuckoo.check(key2)){
+			validation = false;
+			printf("Key: %u did not produce a positive after swapping key %u. \n", key2, key1);
+		} 
+
+		if(!acf_cuckoo.check(key1)){
+			validation = false;
+			printf("Key: %u did not produce a positive after second iteration of swapping key %u. \n", key1, key2);
+		} 
+
+		if(validation){
+			printf("Pair validated: %u, %u\n", key2, key1);
+		}else{
+			printf("Error in pair: %u, %u. Check code\n", key2, key1);
+			printf("Checking key: %u? %u. \n", key1, acf_cuckoo.check(key1));
+			printf("Checking key: %u? %u. \n", key1, acf_cuckoo.check(key1));
+			printf("Checking key: %u? %u. \n", key2, acf_cuckoo.check(key2));
+			printf("Checking key: %u? %u. \n", key1, acf_cuckoo.check(key1));
+			exit(1);
+		}
+            }
+            printf("ACF FP: %lu \n", ar_size);
 	    if(!quiet) fprintf(stderr, "\n");
 
-            int64_t count=0;
-            int64_t ar_size=A_ar.size();
-            num_iter=npf*ar_size;
 
-            //test A set
-            for(int64_t iter=0; iter<num_iter; iter++){
-               int64_t key= A_ar[ rand() % ar_size];
-               //int64_t key= iter;
-            //for (auto key: A_ar) 
-                // ACF query
-                count++;
-                tot_count++;
-                bool flagFF = false;
-		if(acf_cuckoo.check(key)){
-			num_swap++;
-               		flagFF = true;
-		}
-                if (flagFF) {
-                    tot_FF_FP++;
-                    sample_FF_FP++;
-                }
-
-            }
-            printf("ACF FP: %lu : %.6f \n",sample_FF_FP,sample_FF_FP/(count+0.0));
-            if (sample_FF_FP<min_FF_FP) min_FF_FP=sample_FF_FP;
-            if (sample_FF_FP>max_FF_FP) max_FF_FP=sample_FF_FP;
         }// end main loop
             
         printf("---------------------------\n");
         printf("---------------------------\n");
-        printf("stat:ACF FP min/ave/max %lu %lu %lu \n",min_FF_FP,tot_FF_FP/max_loop, max_FF_FP);
-        printf("stat:ACF FPR(%lu) : %.6f \n",tot_FF_FP,tot_FF_FP/(tot_count+0.0));
-        printf("stat:num SWAP : %ld \n",num_swap);
     
-        cout << "results: " << f << ", " << ht_size << ", " << bhs << ", " << skewed <<  ", " << A << ", " << max_loop << ", " << npf  << ", " <<  load_factor << ", " << tot_FF_FP << ", " << tot_count << endl;
 
         printf("\n");
         simtime(&starttime);
@@ -338,12 +384,13 @@ void PrintUsage() {
    printf(" ***\n");
    printf(" -m tsize: Table size\n");
    printf(" -f f_bits: number of fingerprint bits\n");
-   printf(" -b b_bits: number of selection bits\n");
-   printf(" -k skewness: skewness factor\n");
+  // printf(" -b b_bits: number of selection bits\n");
+  // printf(" -k skewness: skewness factor\n");
    printf(" -n num_packets: number of packets for each flow \n");
    printf(" -a as_ratio: set the A/S ratio \n");
    printf(" -S seed: select random seed (for debug)\n");
    printf(" -L load_factor : set the ACF load factor \n");
+   printf(" -p total_pairs : max number of total pairs of FP to be found \n");
    printf(" -v : verbose \n");
    printf(" -h print usage\n");
    printf(" -v verbose enabled\n");
@@ -368,6 +415,12 @@ void init(int argc, char* argv[])
         argv++;
         int flag=0; //if flag 1 there is an argument after the switch
         int c = 0;
+
+
+	// Notice that we have disabled skew and number of selection bits as they
+        // modify the number of fingerprints functions to be used and we would need
+        // n-tuples instead of pairs to force the swapping. Although the code
+        // can be generalized, it is out of the scope of this experiment.
         while ((c = *++argv[0])){
             switch (c) {
                 case 'q':
@@ -376,20 +429,20 @@ void init(int argc, char* argv[])
                     break;
 		case 'a':
                     flag=1;
-                    AS=atoi(argv[1]);
+                    A=atoi(argv[1]);
                     argc--;
                     break;
-                case 'k':
-                    flag=1;
-                    printf("Skewed enabled\n");
-                    skewed=atoi(argv[1]);
-                    argc--;
-                    break;
-                case 'b':
-                    flag=1;
-                    bhs=atoi(argv[1]);
-                    argc--;
-                    break;
+                //case 'k':
+                    //flag=1;
+                    //printf("Skewed enabled\n");
+                    //skewed=atoi(argv[1]);
+                    //argc--;
+                    //break;
+                //case 'b':
+                    //flag=1;
+                    //bhs=atoi(argv[1]);
+                    //argc--;
+                    //break;
                 case 'm':
                     flag=1;
                     ht_size=atoi(argv[1]);
@@ -405,14 +458,19 @@ void init(int argc, char* argv[])
                     seed=atoi(argv[1]);
                     argc--;
                     break;
-                case 'n':
-                    flag=1;
-                    npf=atoi(argv[1]);
-                    argc--;
-                    break;
                 case 'L':
                     flag=1;
                     load_factor=atoi(argv[1]);
+                    argc--;
+                    break;
+                case 'p':
+                    flag=1;
+                    total_pairs=atoi(argv[1]);
+                    argc--;
+                    break;
+                case 'l':
+                    flag=1;
+                    max_loop=atoi(argv[1]);
                     argc--;
                     break;
                 case 'v':
@@ -432,7 +490,6 @@ void init(int argc, char* argv[])
         }
         argv= argv + flag;
     }
-    A=ht_size*num_way*num_cells*AS;
     fbhs=f-bhs;
     //Print general parameters
     printf("general parameters: \n");
@@ -440,7 +497,6 @@ void init(int argc, char* argv[])
         printf("Enable skewed fingerprint\n");
         printf("f0 range: %d/%d \n",(1<<skewed)-1,1<<skewed);
     }
-    max_loop= 250*(1<<((f-8)/2))/AS; 
     printf("seed: %d\n",seed);
     printf("way: %d\n",num_way);
     printf("num_cells: %d\n",num_cells);
@@ -448,8 +504,8 @@ void init(int argc, char* argv[])
     printf("bhs: %d\n",bhs);
     printf("A size: %d\n",A);
     printf("iterations: %d\n",max_loop);
-    printf("AS ratio: %d\n",AS);
-    printf("npf: %d\n",npf);
+    printf("max pairs: %d\n",total_pairs);
+    printf("Load factor: %d\n",load_factor);
     printf("---------------------------\n");
 
 
