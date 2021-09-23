@@ -23,16 +23,14 @@ int skewed=0;
 
 int max_loop=2;    //num of trials
 int load_factor=95;    //load factor
-int A=0;
-int bhs=1;
+int bhs=2;
 
-int total_pairs = 1; 
+int total_groups = 1; 
 
 int64_t tot_access=0;
 
 map<int64_t,int> S_map;
 map<int64_t,int> A_map;
-vector<int64_t> A_ar;
 
 //char* filename="ip4_as20.txt"; //database filename
 //char* filename=NULL; //database filename
@@ -166,6 +164,16 @@ class ACF
 	}
 };
 
+bool is_false_positive(ACF acf_cuckoo, int key){
+	bool false_positive = false;
+	if(acf_cuckoo.check(key)){ //A positive is returned. Check if we can identify a false positive
+		if(!acf_cuckoo.check(key)){ //False positive detected
+			false_positive = true;
+		}
+	}
+	return false_positive;
+}
+
 int run()
 {
     
@@ -214,7 +222,6 @@ int run()
         for (int loop=0; loop<max_loop; loop++) {
             S_map.clear();
             A_map.clear();
-            A_ar.clear();
             bool fail_insert=false;
 
             acf_cuckoo.clear();
@@ -267,104 +274,176 @@ int run()
             }
             printf("1st Consistency B passed\n");
 
-            //create and test the A set
-            for (int64_t i = 0;  i <A; i++) {
-                unsigned int key = (unsigned int) dis(gen);
-		// The attacker only knows about A, not about S
-                if (A_map.count(key) > 0)
-                {
-                    i--;
-                    continue;
-                }
-
-		bool false_positive = false;
-		if(acf_cuckoo.check(key)){ //A positive is returned. Check if we can identify a false positive
-			if(!acf_cuckoo.check(key)){ //False positive detected
-				false_positive = true;
-			}
-		}
-		if(!false_positive){
-		    i--;
-                    continue;
-		}
-                if (S_map.count(key) > 0){
-			printf("Consistency check failed, true positive detected %u\n", key);
-		}
-                //insert in A_map and in A_ar 
-                A_map[key] = line++;
-		A_ar.push_back(key);
-
-                verprintf("insert key: %u \n", key);
-                if ((i % 1000) == 0) {
-			if(!quiet) fprintf(stderr, "loop: %d. Create the A set: %lu\r", loop, i);
-                }
-            }
-            int64_t ar_size=A_ar.size();
-
 	    int total_found = 0; 
-            pair<int,int>* attack_set = new pair<int,int>[total_pairs];
-            for(int64_t first=0; first<A-1; first++){ //Take the first element and look for a swapping pair
-		unsigned int key = A_ar[first];
-		
-		while(acf_cuckoo.check(key)){} // Force the swap if it is not already done for this element
+            array<int,4>* attack_set = new array<int,4>[total_groups];
+            //create and test the false positive sequences
+            int n_sequence = 1<<bhs; // 4 in this case
 
-            	for(int64_t second=first+1; second<A; second++){ //Take the first element and look for a swapping pair
-			unsigned int key2 = A_ar[second];
-			if(!acf_cuckoo.check(key2)){ // If it does not produce a FP, go to the next element
-				continue;
-			}
-			if(acf_cuckoo.check(key)){ // If it is a pair, it will produce a FP for the first key after swapping
-			        printf("Pair found: %u, %u\n", key2, key);
-				attack_set[total_found]=make_pair(key2,key);
-				total_found++;
-				break;
-			}
+	    int max_tries = 10;
+            while(total_found<total_groups){
+                unsigned int victim_key = (unsigned int) dis(gen);
+                if (A_map.count(victim_key) > 0)
+                {
+                    continue;
+                }
+
+		//Some false positives will not be detected if they affect more than 1 way.
+		//However it is not a problem as we only need a subset of them
+		if(!is_false_positive(acf_cuckoo, victim_key)){
+                    continue;
 		}
 
-		if (total_found>=total_pairs){
-			break;
+                if (S_map.count(victim_key) > 0){
+			printf("Consistency check failed, true positive detected %u\n", victim_key);
 		}
-	    }
 
+                //insert in A_map 
+                A_map[victim_key] = line++;
+                verprintf("insert key: %u \n", victim_key);
 
-	    // Validation of the pairs of false positives
+		array<int,4> current_set = {-1,-1,-1,victim_key};
+
+		printf("Looking for sequence %u\n\n",(total_found+1));
+	        int tries = 1;
+		bool failed = false;
+		for(int i=1; i<n_sequence; i++){
+               		unsigned int triggering_key = (unsigned int) dis(gen);
+
+			if(!is_false_positive(acf_cuckoo, triggering_key)){
+				i--;
+                    		continue;
+			}
+			// When detecting it as a false_positive, we have swapped the fingerprint.
+			// We will now check if it triggered a false positive on victim_key,
+
+			if(!acf_cuckoo.check(victim_key)){ 
+				// As it may have triggered a false positive on a different element
+				// of the sequence, let's clean them before continue
+				for(int pos=n_sequence-i+1;pos<n_sequence;pos++){
+					int next_key = current_set[pos];
+					while(acf_cuckoo.check(next_key)){} // trigger next key 
+				}
+				i--;
+                    		continue;
+			}
+
+			// As the positive may be due to a different fingerprint in a different way
+                        // from the one that shared the last two keys, we need to verify that the
+                        // sequence is triggered.
+			if (i>1){
+
+				verprintf("Candidate for position %u found. Elements: %u triggered %u\n", (n_sequence-i-1), triggering_key, victim_key);
+				verprintf("Checking for way-bucket\n");
+				while(acf_cuckoo.check(victim_key)){} // victim_key is in position 
+				bool same_way_bucket = true;
+				int prev_key = victim_key;
+				for(int pos=n_sequence-i+1;pos<n_sequence;pos++){
+					int next_key = current_set[pos];
+					verprintf("Checking if %u triggered %u at position %u --> ", prev_key, next_key, pos);
+					if(!acf_cuckoo.check(next_key)){ // Not in the same bucket-way
+						verprintf("Failed\n");
+						same_way_bucket = false;
+						break;
+					}
+					verprintf("Checked\n");
+					while(acf_cuckoo.check(next_key)){} // trigger next key 
+					prev_key = next_key;
+				}
+				if(same_way_bucket && i==(n_sequence-1)){ 
+					verprintf("Checking if last element %u triggered candidate %u --> ", prev_key, triggering_key);
+					//Once that we have swapped the fingerprint with the last key, 
+					// we have to check that the found key is now positive
+					// Otherwise, look for a different key
+					if(!acf_cuckoo.check(triggering_key)){ 
+						verprintf("Failed\n");
+						same_way_bucket = false;
+						// We are going to limit the number of tries and then reset the sequence
+					}else{
+						verprintf("Checked\n");
+					}
+				}
+				if(!same_way_bucket){
+					if(tries==max_tries){
+						printf("Max number of tries completed for this sequence\n\n\n");
+						failed = true;
+						break;
+					}else{
+						verprintf("Tries %u vs. Max number of tries %u\n", tries, max_tries);
+					}
+					tries++;
+					i--;
+                    			continue;
+				}
+				tries = 1;
+			}
+			// Set key 2 in the previous position
+			current_set[n_sequence-i-1] = triggering_key;
+			verprintf("Element %u found. Elements: %u triggered %u\n", (n_sequence-i-1), triggering_key, victim_key);
+			victim_key = triggering_key;
+		}
+		if (failed){
+			printf("Retrying sequence %u.\n", total_found+1);
+		}else{
+			attack_set[total_found]=current_set;
+			total_found++;
+			printf("Sequence completed.\n\n");
+		}
+            }
+
+	    // Validation of the groups of false positives
             for (int idx=0; idx<total_found; idx++){
-		int key1 = attack_set[idx].first;
-		int key2 = attack_set[idx].second;
-		
+		array<int,4> current_set = attack_set[idx];
 		bool validation = true;
+		int key1 = current_set.at(0);
+		int key2 = current_set[1];
+		int key3 = current_set[2];
+		int key4 = current_set[3];
 
-		while(acf_cuckoo.check(key2)){} // While Just in case key2 is FP in more than 1 way
-
+		//Force key1 to be the next to return a false positive
+		while(acf_cuckoo.check(key2)){} 
+		while(acf_cuckoo.check(key3)){} 
+		while(acf_cuckoo.check(key4)){} 
+		
 		if(!acf_cuckoo.check(key1)){
 			validation = false;
-			printf("Key: %u did not produce a positive after swapping key %u. \n", key1, key2);
+			printf("Key: %u did not produce a positive after swapping key %u. \n", key1, key4);
 		} 
 
 		while(acf_cuckoo.check(key1)){} // While Just in case key1 is FP in more than 1 way
 
-		if(!acf_cuckoo.check(key2)){
+		if(validation && !acf_cuckoo.check(key2)){
 			validation = false;
 			printf("Key: %u did not produce a positive after swapping key %u. \n", key2, key1);
 		} 
 
-		if(!acf_cuckoo.check(key1)){
+		while(acf_cuckoo.check(key2)){} // While Just in case key2 is FP in more than 1 way
+
+		if(validation && !acf_cuckoo.check(key3)){
 			validation = false;
-			printf("Key: %u did not produce a positive after second iteration of swapping key %u. \n", key1, key2);
+			printf("Key: %u did not produce a positive after swapping key %u. \n", key3, key2);
+		} 
+
+		while(acf_cuckoo.check(key3)){} // While Just in case key3 is FP in more than 1 way
+
+		if(validation && !acf_cuckoo.check(key4)){
+			validation = false;
+			printf("Key: %u did not produce a positive after swapping key %u. \n", key4, key3);
+		} 
+
+		while(acf_cuckoo.check(key4)){} // While Just in case key3 is FP in more than 1 way
+
+		if(validation && !acf_cuckoo.check(key1)){
+			validation = false;
+			printf("Key: %u did not produce a positive after second iteration of swapping key %u. \n", key1, key4);
 		} 
 
 		if(validation){
-			printf("Pair validated: %u, %u\n", key2, key1);
+			printf("Tuple validated: %u, %u, %u, %u.\n", key1, key2, key3, key4);
 		}else{
-			printf("Error in pair: %u, %u. Check code\n", key2, key1);
-			printf("Checking key: %u? %u. \n", key1, acf_cuckoo.check(key1));
-			printf("Checking key: %u? %u. \n", key1, acf_cuckoo.check(key1));
-			printf("Checking key: %u? %u. \n", key2, acf_cuckoo.check(key2));
-			printf("Checking key: %u? %u. \n", key1, acf_cuckoo.check(key1));
+			printf("Error in tuple: %u, %u, %u, %u. Check code\n", key1, key2, key3, key4);
 			exit(1);
 		}
             }
-            printf("ACF FP: %lu \n", ar_size);
 	    if(!quiet) fprintf(stderr, "\n");
 
 
@@ -387,10 +466,9 @@ void PrintUsage() {
   // printf(" -b b_bits: number of selection bits\n");
   // printf(" -k skewness: skewness factor\n");
    printf(" -n num_packets: number of packets for each flow \n");
-   printf(" -a a size: size of the initial false positive set\n");
    printf(" -S seed: select random seed (for debug)\n");
    printf(" -L load_factor : set the ACF load factor \n");
-   printf(" -p total_pairs : max number of total pairs of FP to be found \n");
+   printf(" -p total_groups : max number of total groups of FP to be found \n");
    printf(" -v : verbose \n");
    printf(" -h print usage\n");
    printf(" -v verbose enabled\n");
@@ -419,18 +497,13 @@ void init(int argc, char* argv[])
 
 	// Notice that we have disabled skew and number of selection bits as they
         // modify the number of fingerprints functions to be used and we would need
-        // n-tuples instead of pairs to force the swapping. Although the code
+        // other n-tuples to force the swapping. Although the code
         // can be generalized, it is out of the scope of this experiment.
         while ((c = *++argv[0])){
             switch (c) {
                 case 'q':
                     printf("\nQuiet enabled\n");
                     quiet=true;
-                    break;
-		case 'a':
-                    flag=1;
-                    A=atoi(argv[1]);
-                    argc--;
                     break;
                 //case 'k':
                     //flag=1;
@@ -465,7 +538,7 @@ void init(int argc, char* argv[])
                     break;
                 case 'p':
                     flag=1;
-                    total_pairs=atoi(argv[1]);
+                    total_groups=atoi(argv[1]);
                     argc--;
                     break;
                 case 'l':
@@ -502,9 +575,8 @@ void init(int argc, char* argv[])
     printf("num_cells: %d\n",num_cells);
     printf("Table size: %d\n",ht_size);
     printf("bhs: %d\n",bhs);
-    printf("A size: %d\n",A);
     printf("iterations: %d\n",max_loop);
-    printf("max pairs: %d\n",total_pairs);
+    printf("max groups: %d\n",total_groups);
     printf("Load factor: %d\n",load_factor);
     printf("---------------------------\n");
 
