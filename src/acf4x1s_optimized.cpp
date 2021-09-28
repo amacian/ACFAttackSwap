@@ -32,8 +32,6 @@ int64_t tot_access=0;
 map<int64_t,int> S_map;
 map<int64_t,int> A_map;
 
-//char* filename="ip4_as20.txt"; //database filename
-//char* filename=NULL; //database filename
 
 //select the fingerprint function
 //                                        16-bhs  
@@ -129,6 +127,7 @@ class ACF
 						pFF[i][p].first= (pFF[i][p].first +1) %(1<<bhs);
 
                     			pFF[i][p].second=fingerprint(key1,pFF[i][p].first,fbhs);
+					verprintf("Key %u Swapping [%u][%u], %u --> %u\n", key, i, p, ii, pFF[i][p].first);
 				}
 				return true;
                         }
@@ -164,14 +163,16 @@ class ACF
 	}
 };
 
-bool is_false_positive(ACF acf_cuckoo, int key){
-	bool false_positive = false;
-	if(acf_cuckoo.check(key)){ //A positive is returned. Check if we can identify a false positive
+bool is_false_positive(ACF acf_cuckoo, int key, int n_sequence){
+	if(!acf_cuckoo.check(key)){ 
+		return false;
+	}
+	for (int i=1; i<n_sequence; i++){
 		if(!acf_cuckoo.check(key)){ //False positive detected
-			false_positive = true;
+			return true;
 		}
 	}
-	return false_positive;
+	return false;
 }
 
 int run()
@@ -275,11 +276,12 @@ int run()
             printf("1st Consistency B passed\n");
 
 	    int total_found = 0; 
-            array<int,4>* attack_set = new array<int,4>[total_groups];
-            //create and test the false positive sequences
-            int n_sequence = 1<<bhs; // 4 in this case
+            vector<int>* attack_set = new vector<int>[total_groups];
 
-	    int max_tries = 10;
+            //create and test the false positive sequences
+            int n_sequence = 1<<bhs; 
+
+	    int max_tries = 1000;//n_sequence*1.5;//10;
             while(total_found<total_groups){
                 unsigned int victim_key = (unsigned int) dis(gen);
                 if (A_map.count(victim_key) > 0)
@@ -289,7 +291,7 @@ int run()
 
 		//Some false positives will not be detected if they affect more than 1 way.
 		//However it is not a problem as we only need a subset of them
-		if(!is_false_positive(acf_cuckoo, victim_key)){
+		if(!is_false_positive(acf_cuckoo, victim_key, n_sequence)){
                     continue;
 		}
 
@@ -301,43 +303,88 @@ int run()
                 A_map[victim_key] = line++;
                 verprintf("insert key: %u \n", victim_key);
 
-		array<int,4> current_set = {-1,-1,-1,victim_key};
+		vector<int> current_set = {};
+		current_set.resize(n_sequence);
+		current_set[n_sequence-1]=victim_key;
 
 		printf("Looking for sequence %u\n\n",(total_found+1));
 	        int tries = 1;
 		bool failed = false;
+            	vector<int> positives = {};
+		positives.resize(1);
+		unsigned int idx_positives = 0;
 		for(int i=1; i<n_sequence; i++){
-               		unsigned int triggering_key = (unsigned int) dis(gen);
+               		unsigned int triggering_key;
+			if(i<3){
+				triggering_key = (unsigned int) dis(gen);
+			}else{
+				if (idx_positives>(positives.size()-1)){
+					failed = true;	
+					break;
+				}
+				triggering_key = positives[idx_positives++];
+				verprintf("Old positive: %u\n", triggering_key);
+			}
 
-			if(!is_false_positive(acf_cuckoo, triggering_key)){
+			if(!is_false_positive(acf_cuckoo, triggering_key, n_sequence)){
 				i--;
                     		continue;
 			}
+
+			if (i==2){
+				positives.push_back(triggering_key);
+			}
+
 			// When detecting it as a false_positive, we have swapped the fingerprint.
 			// We will now check if it triggered a false positive on victim_key,
-
 			if(!acf_cuckoo.check(victim_key)){ 
 				// As it may have triggered a false positive on a different element
 				// of the sequence, let's clean them before continue
-				for(int pos=n_sequence-i+1;pos<n_sequence;pos++){
+				bool retrigger = false;
+				for(int pos=n_sequence-i;pos<n_sequence && !retrigger;pos++){
 					int next_key = current_set[pos];
-					while(acf_cuckoo.check(next_key)){} // trigger next key 
+					if(acf_cuckoo.check(next_key)){} // trigger next key 
+					// We should be careful as one of these keys may be duplicated
+					// So we check every step to see if they retrigger the sequence.
+					if(acf_cuckoo.check(victim_key)){
+						// retriggering in a previous position
+						triggering_key = next_key;
+						retrigger=true;
+						verprintf("Retriggering with %u over %u\n", triggering_key, victim_key);
+						break; //stop triggering the rest of the chain as one of them may 
+							//also trigger the sequence
+					}
 				}
-				i--;
-                    		continue;
+				if(!retrigger){
+					i--;
+                    			continue;
+				}
 			}
 
+
+			if (victim_key!=(unsigned int)current_set[n_sequence-i+1] &&
+				acf_cuckoo.check(victim_key)){
+				// A chained trigger has been detected due to a self-trigger
+				verprintf("Chained trigger with %u \n", victim_key);
+				triggering_key = victim_key;
+			}
 			// As the positive may be due to a different fingerprint in a different way
                         // from the one that shared the last two keys, we need to verify that the
                         // sequence is triggered.
-			if (i>1){
+			if (i>1 || n_sequence==2){
 
 				verprintf("Candidate for position %u found. Elements: %u triggered %u\n", (n_sequence-i-1), triggering_key, victim_key);
 				verprintf("Checking for way-bucket\n");
-				while(acf_cuckoo.check(victim_key)){} // victim_key is in position 
+				int init_pos = n_sequence-i+1;
+				if(victim_key==(unsigned int)current_set[n_sequence-i+1] &&
+				   acf_cuckoo.check(victim_key)){
+					init_pos++;
+				}
+				if(acf_cuckoo.check(victim_key)){} // victim_key is in position 
 				bool same_way_bucket = true;
+				bool last_triggers_first = false;
 				int prev_key = victim_key;
-				for(int pos=n_sequence-i+1;pos<n_sequence;pos++){
+				for(int pos=init_pos;pos<n_sequence;pos++){
 					int next_key = current_set[pos];
 					verprintf("Checking if %u triggered %u at position %u --> ", prev_key, next_key, pos);
 					if(!acf_cuckoo.check(next_key)){ // Not in the same bucket-way
@@ -346,7 +393,13 @@ int run()
 						break;
 					}
 					verprintf("Checked\n");
-					while(acf_cuckoo.check(next_key)){} // trigger next key 
+					// Check for self-triggering
+					verprintf("Self-triggering?: %u == %u ", next_key, current_set[(pos==n_sequence-1)?0:pos+1]);
+					if(next_key==current_set[(pos==n_sequence-1)?0:pos+1]){
+						pos++;
+						verprintf("Self-triggering: %u at position %u --> ", next_key, (last_triggers_first)?0:pos);
+					}
+					if(acf_cuckoo.check(next_key)){} // trigger next key 
 					prev_key = next_key;
 				}
 				if(same_way_bucket && i==(n_sequence-1)){ 
@@ -354,12 +407,12 @@ int run()
 					//Once that we have swapped the fingerprint with the last key, 
 					// we have to check that the found key is now positive
 					// Otherwise, look for a different key
-					if(!acf_cuckoo.check(triggering_key)){ 
+					if(triggering_key==(unsigned int)current_set[n_sequence-1] || acf_cuckoo.check(triggering_key)){ 
+						verprintf("Checked\n");
+					}else{
 						verprintf("Failed\n");
 						same_way_bucket = false;
 						// We are going to limit the number of tries and then reset the sequence
-					}else{
-						verprintf("Checked\n");
 					}
 				}
 				if(!same_way_bucket){
@@ -369,6 +422,13 @@ int run()
 						break;
 					}else{
 						verprintf("Tries %u vs. Max number of tries %u\n", tries, max_tries);
+						if(i==3){
+							//positives[idx_positives-1]=positives[idx_positives];
+							//idx_positives = 0;
+						}
+						/*for(int pos=n_sequence-i;pos<n_sequence;pos++){
+						//	while(acf_cuckoo.check(current_set[pos])){} // trigger next key 
+						}*/
 					}
 					tries++;
 					i--;
@@ -378,8 +438,9 @@ int run()
 			}
 			// Set key 2 in the previous position
 			current_set[n_sequence-i-1] = triggering_key;
-			verprintf("Element %u found. Elements: %u triggered %u\n", (n_sequence-i-1), triggering_key, victim_key);
+			verprintf("Element %u found. Elements: %u triggered %u. Iteration: %i; Total_it:%u\n", (n_sequence-i-1), triggering_key, victim_key, i, n_sequence-1);
 			victim_key = triggering_key;
+			idx_positives = 0;
 		}
 		if (failed){
 			printf("Retrying sequence %u.\n", total_found+1);
@@ -392,55 +453,40 @@ int run()
 
 	    // Validation of the groups of false positives
             for (int idx=0; idx<total_found; idx++){
-		array<int,4> current_set = attack_set[idx];
+		vector<int> current_set = attack_set[idx];
+
+		//Force first elemtent of the sequence to be the next to return a false positive
+		for (int j=1;j<n_sequence;j++){
+			while(acf_cuckoo.check(current_set[j])){} 
+		}
+
+		int prev_key = current_set[n_sequence-1];
+
 		bool validation = true;
-		int key1 = current_set.at(0);
-		int key2 = current_set[1];
-		int key3 = current_set[2];
-		int key4 = current_set[3];
-
-		//Force key1 to be the next to return a false positive
-		while(acf_cuckoo.check(key2)){} 
-		while(acf_cuckoo.check(key3)){} 
-		while(acf_cuckoo.check(key4)){} 
-		
-		if(!acf_cuckoo.check(key1)){
-			validation = false;
-			printf("Key: %u did not produce a positive after swapping key %u. \n", key1, key4);
+		for (int j=0;j<n_sequence;j++){
+			int key1 = current_set[j];
+			if(acf_cuckoo.check(key1)){} // While Just in case key1 is FP in more than 1 way
+			prev_key = key1;
 		} 
 
-		while(acf_cuckoo.check(key1)){} // While Just in case key1 is FP in more than 1 way
 
-		if(validation && !acf_cuckoo.check(key2)){
+		if(validation && !(prev_key==current_set[0]) && !acf_cuckoo.check(current_set[0])){
 			validation = false;
-			printf("Key: %u did not produce a positive after swapping key %u. \n", key2, key1);
-		} 
-
-		while(acf_cuckoo.check(key2)){} // While Just in case key2 is FP in more than 1 way
-
-		if(validation && !acf_cuckoo.check(key3)){
-			validation = false;
-			printf("Key: %u did not produce a positive after swapping key %u. \n", key3, key2);
-		} 
-
-		while(acf_cuckoo.check(key3)){} // While Just in case key3 is FP in more than 1 way
-
-		if(validation && !acf_cuckoo.check(key4)){
-			validation = false;
-			printf("Key: %u did not produce a positive after swapping key %u. \n", key4, key3);
-		} 
-
-		while(acf_cuckoo.check(key4)){} // While Just in case key3 is FP in more than 1 way
-
-		if(validation && !acf_cuckoo.check(key1)){
-			validation = false;
-			printf("Key: %u did not produce a positive after second iteration of swapping key %u. \n", key1, key4);
+			printf("Key: %u did not produce a positive after second iteration of swapping key %u. \n", current_set[0], prev_key);
 		} 
 
 		if(validation){
-			printf("Tuple validated: %u, %u, %u, %u.\n", key1, key2, key3, key4);
+			printf("Tuple validated: %u, %u", current_set[0], current_set[1]);
+			for (int j=2;j<n_sequence;j++){
+				printf(", %u", current_set[j]);
+			}
+			printf(".\n");
 		}else{
-			printf("Error in tuple: %u, %u, %u, %u. Check code\n", key1, key2, key3, key4);
+			printf("Error in tuple: %u, %u", current_set[0], current_set[1]);
+			for (int j=2;j<n_sequence;j++){
+				printf(", %u", current_set[j]);
+			}
+			printf(". Check code.\n");
 			exit(1);
 		}
             }
@@ -463,7 +509,7 @@ void PrintUsage() {
    printf(" ***\n");
    printf(" -m tsize: Table size\n");
    printf(" -f f_bits: number of fingerprint bits\n");
-  // printf(" -b b_bits: number of selection bits\n");
+   printf(" -b b_bits: number of selection bits\n");
   // printf(" -k skewness: skewness factor\n");
    printf(" -n num_packets: number of packets for each flow \n");
    printf(" -S seed: select random seed (for debug)\n");
@@ -511,11 +557,12 @@ void init(int argc, char* argv[])
                     //skewed=atoi(argv[1]);
                     //argc--;
                     //break;
-                //case 'b':
-                    //flag=1;
-                    //bhs=atoi(argv[1]);
-                    //argc--;
-                    //break;
+                case 'b':
+                    flag=1;
+                    bhs=atoi(argv[1]);
+                    if(bhs<1){bhs=1;}
+                    argc--;
+                    break;
                 case 'm':
                     flag=1;
                     ht_size=atoi(argv[1]);
