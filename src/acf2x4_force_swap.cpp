@@ -3,6 +3,7 @@
 #include <string.h>
 #include <iostream>
 #include <vector>
+#include <string>
 #include <map>
 #include <time.h>
 #include <limits.h>
@@ -117,7 +118,7 @@ class ACF
 						int64_t key2 = cuckoo->get_key(i,jj,p);
 						int value2 = cuckoo->query(key2);
 						if (!cuckoo->remove(key1)) {// false_ii is free
-				                        printf("false_ii is free\n");
+				                        if (!quiet) printf("false_ii is free\n");
                     				}
                     				if (!cuckoo->remove(key2)) {// jj is free
                         				FF[i][ii][p]=-1;
@@ -213,7 +214,6 @@ void pick_four(int configuration, vector<int> current_set, vector<int>* new_set)
 int run()
 {
     
-    time_t starttime = time(NULL);
     int line=0;
     
     //seed=1456047300;
@@ -249,6 +249,8 @@ int run()
     printf("***:---------------------------\n");
 
     setbuf(stdout, NULL);
+
+    printf("d;c;f;b;time_big_seq;time_reduction;time_total;failure;sequence_size;trigger_condition\n");
 
 //main loop
 //
@@ -289,10 +291,11 @@ int run()
             }
               
             if (!quiet) fprintf(stderr, "\n");
-            printf("End insertion\n");
-            printf("---------------------------\n");
-            printf("items= %d\n",acf_cuckoo.get_nitem());
-            printf("load(%d)= %f \n",loop,acf_cuckoo.get_nitem()/(0.0+acf_cuckoo.get_size()));
+            if (!quiet){ printf("End insertion\n");
+            	printf("---------------------------\n");
+            	printf("items= %d\n",acf_cuckoo.get_nitem());
+            	printf("load(%d)= %f \n",loop,acf_cuckoo.get_nitem()/(0.0+acf_cuckoo.get_size()));
+	    }
 	    acf_cuckoo.stat();
 
             // consistency check !!!
@@ -306,15 +309,18 @@ int run()
                     exit(1);
                 }
             }
-            printf("1st Consistency passed\n");
+            if (!quiet) printf("1st Consistency passed\n");
 	    
 	    int total_found = 0;
 	    vector<int>* attack_set = new vector<int>[total_groups];
+	    vector<double> calculated = {};
+	    calculated.resize(total_groups);
 
             //create and test the false positive sequences
             int n_sequence = 1<<num_cells*2; 
 
    	    while(total_found<total_groups){
+		time_t starttime = time(NULL);
                 unsigned int victim_key = (unsigned int) dis(gen);
 		if (A_map.count(victim_key) > 0)
                 {
@@ -339,7 +345,7 @@ int run()
 		current_set.resize(n_sequence);
 		current_set[0]=victim_key;
 
-		printf("Looking for sequence %u\n\n",(total_found+1));
+		if (!quiet) printf("Looking for sequence %u\n\n",(total_found+1));
 		bool failed = true;
 
 		for(int i=1; i<n_sequence; i++){
@@ -382,11 +388,14 @@ int run()
 			}
 		}
 		if (failed){
-			printf("Retrying sequence %u.\n", total_found+1);
+			if (!quiet) printf("Retrying sequence %u.\n", total_found+1);
 		}else{
 			attack_set[total_found]=current_set;
+			if (!quiet) printf("Sequence completed.\n\n");
+			time_t endtime = time(NULL);
+			double second = difftime(endtime,starttime);
+			calculated[total_found]=second;
 			total_found++;
-			printf("Sequence completed.\n\n");
 		}
 
             }
@@ -395,7 +404,7 @@ int run()
             for (int idx=0; idx<total_found; idx++){
 		vector<int> current_set = attack_set[idx];
 		int elements = current_set.size();
-		printf("Sequence %u with %u elements being checked.\n", idx, elements);
+		if (!quiet) printf("Sequence %u with %u elements being checked.\n", idx, elements);
 
 		bool validation = true;
 		int swaps = 0;
@@ -416,11 +425,11 @@ int run()
 
 
 		if(validation){
-			printf("Tuple validated: %u, %u", current_set[0], current_set[1]);
+			if (!quiet) printf("Tuple validated: %u, %u", current_set[0], current_set[1]);
 			for (int j=2;j<elements;j++){
-				printf(", %u", current_set[j]);
+				if (!quiet) printf(", %u", current_set[j]);
 			}
-			printf(".\n");
+			if (!quiet) printf(".\n");
 		}else{
 			printf("Error in tuple: %u, %u", current_set[0], current_set[1]);
 			for (int j=2;j<elements;j++){
@@ -436,19 +445,21 @@ int run()
             for (int idx=0; idx<total_found; idx++){
 		vector<int> current_set = attack_set[idx];
 		int elements = current_set.size();
-		printf("Sequence %u with %u elements being reduced.\n", idx, elements);
+		if (!quiet) printf("Sequence %u with %u elements being reduced.\n", idx, elements);
 
 		vector<int> new_set(num_cells);
 
+		time_t starttime = time(NULL);
 		bool validation = true;
 		for (int config=0; config<(fact(elements)/144); config++){
 			pick_four(config+1, current_set, &new_set);
-			verprintf("Tuple extracred: %u, %u", new_set[0], new_set[1]);
-			for (int j=2;j<num_cells;j++){
-				printf(", %u", new_set[j]);
+			if(!quiet){
+				printf("Tuple extracted: %u, %u", new_set[0], new_set[1]);
+				for (int j=2;j<num_cells;j++){
+					printf(", %u", new_set[j]);
+				}
+				printf(".\n");
 			}
-			printf(".\n");
-			
 			int swaps = 0;
 			validation=true;
 			while (validation){
@@ -465,37 +476,41 @@ int run()
 				}
 			}
 			if (validation){
-				printf("Validated in configuration: %u, %u\n", config+1, (fact(elements)/fact(num_cells)));
+				if (!quiet) printf("Validated in configuration: %u, %u\n", config+1, (fact(elements)/fact(num_cells)));
 				break;
 			}
 		}
 
 
+		time_t endtime = time(NULL);
+		double second = difftime(endtime,starttime);
 
 		if(validation){
-			printf("Tuple validated: %u, %u", new_set[0], new_set[1]);
-			for (int j=2;j<num_cells;j++){
-				printf(", %u", new_set[j]);
+			printf("%u;%u;%u;%u;%lf;%lf;%lf;0;%u;%u\n", num_way, num_cells, f, ht_size, calculated[idx],
+				       second, second+calculated[idx], elements, max_triggered);
+			if (!quiet){
+			       	printf("Tuple validated: %u, %u", new_set[0], new_set[1]);
+				for (int j=2;j<num_cells;j++){
+					printf(", %u", new_set[j]);
+				}
+				printf(".\n");
 			}
-			printf(".\n");
 		}else{
-			printf("Impossible to reduce the tuple: %u, %u", current_set[0], current_set[1]);
-			for (int j=2;j<elements;j++){
-				printf(", %u", current_set[j]);
+			printf("%u;%u;%u;%u;%lf;%lf;%lf;1;%u;%u\n", num_way, num_cells, f, ht_size, calculated[idx],
+				       second, second+calculated[idx], elements, max_triggered);
+			if(!quiet){
+				printf("Impossible to reduce the tuple: %u, %u", current_set[0], current_set[1]);
+				for (int j=2;j<elements;j++){
+					printf(", %u", current_set[j]);
+				}
+				printf("\n");
 			}
-			printf(". Check code.\n");
 		}
             }
 
 
         }// end main loop
             
-        printf("---------------------------\n");
-        printf("---------------------------\n");
-    
-
-        printf("\n");
-        simtime(&starttime);
         return 0;
 }
 

@@ -178,7 +178,6 @@ bool is_false_positive(ACF acf_cuckoo, int key, int n_sequence){
 int run()
 {
     
-    time_t starttime = time(NULL);
     int line=0;
     
     //seed=1456047300;
@@ -213,6 +212,8 @@ int run()
     printf("***:Buckets: %d\n",num_way*num_cells*ht_size);
     printf("***:Total size (bits): %d\n",f*num_way*num_cells*ht_size);
     printf("***:---------------------------\n");
+
+    printf("d;c;f;s;b;time\n");
 
     setbuf(stdout, NULL);
 
@@ -256,10 +257,12 @@ int run()
             }
               
             if (!quiet) fprintf(stderr, "\n");
-            printf("End insertion\n");
-            printf("---------------------------\n");
-            printf("items= %d\n",acf_cuckoo.get_nitem());
-            printf("load(%d)= %f \n",loop,acf_cuckoo.get_nitem()/(0.0+acf_cuckoo.get_size()));
+            if (!quiet){ 
+		printf("End insertion\n");
+            	printf("---------------------------\n");
+            	printf("items= %d\n",acf_cuckoo.get_nitem());
+            	printf("load(%d)= %f \n",loop,acf_cuckoo.get_nitem()/(0.0+acf_cuckoo.get_size()));
+	    }
 	    acf_cuckoo.stat();
 
             // consistency check !!!
@@ -273,7 +276,7 @@ int run()
                     exit(1);
                 }
             }
-            printf("1st Consistency B passed\n");
+            if (!quiet) printf("1st Consistency B passed\n");
 
 	    int total_found = 0; 
             vector<int>* attack_set = new vector<int>[total_groups];
@@ -283,6 +286,7 @@ int run()
 
 	    int max_tries = 1000;//n_sequence*1.5;//10;
             while(total_found<total_groups){
+    		time_t starttime = time(NULL);
                 unsigned int victim_key = (unsigned int) dis(gen);
                 if (A_map.count(victim_key) > 0)
                 {
@@ -307,7 +311,7 @@ int run()
 		current_set.resize(n_sequence);
 		current_set[n_sequence-1]=victim_key;
 
-		printf("Looking for sequence %u\n\n",(total_found+1));
+		if (!quiet) printf("Looking for sequence %u\n\n",(total_found+1));
 	        int tries = 1;
 		bool failed = false;
             	vector<int> positives = {};
@@ -417,7 +421,7 @@ int run()
 				}
 				if(!same_way_bucket){
 					if(tries==max_tries){
-						printf("Max number of tries completed for this sequence\n\n\n");
+						if (!quiet) printf("Max number of tries completed for this sequence\n\n\n");
 						failed = true;
 						break;
 					}else{
@@ -443,11 +447,14 @@ int run()
 			idx_positives = 0;
 		}
 		if (failed){
-			printf("Retrying sequence %u.\n", total_found+1);
+			if (!quiet) printf("Retrying sequence %u.\n", total_found+1);
 		}else{
 			attack_set[total_found]=current_set;
 			total_found++;
-			printf("Sequence completed.\n\n");
+			if (!quiet) printf("Sequence completed.\n\n");
+			time_t endtime = time(NULL);
+ 			double second = difftime(endtime,starttime);
+			printf("%u;%u;%u;%u;%u;%f\n", num_way, num_cells, fbhs, bhs, ht_size, second);
 		}
             }
 
@@ -472,21 +479,21 @@ int run()
 
 		if(validation && !(prev_key==current_set[0]) && !acf_cuckoo.check(current_set[0])){
 			validation = false;
-			printf("Key: %u did not produce a positive after second iteration of swapping key %u. \n", current_set[0], prev_key);
+			if (!quiet) printf("Key: %u did not produce a positive after second iteration of swapping key %u. \n", current_set[0], prev_key);
 		} 
 
 		if(validation){
-			printf("Tuple validated: %u, %u", current_set[0], current_set[1]);
+			if (!quiet) printf("Tuple validated: %u, %u", current_set[0], current_set[1]);
 			for (int j=2;j<n_sequence;j++){
-				printf(", %u", current_set[j]);
+				if (!quiet) printf(", %u", current_set[j]);
 			}
-			printf(".\n");
+			if (!quiet) printf(".\n");
 		}else{
-			printf("Error in tuple: %u, %u", current_set[0], current_set[1]);
+			if (!quiet) printf("Error in tuple: %u, %u", current_set[0], current_set[1]);
 			for (int j=2;j<n_sequence;j++){
-				printf(", %u", current_set[j]);
+				if (!quiet) printf(", %u", current_set[j]);
 			}
-			printf(". Check code.\n");
+			if (!quiet) printf(". Check code.\n");
 			exit(1);
 		}
             }
@@ -495,12 +502,7 @@ int run()
 
         }// end main loop
             
-        printf("---------------------------\n");
-        printf("---------------------------\n");
-    
-
         printf("\n");
-        simtime(&starttime);
         return 0;
 }
 
