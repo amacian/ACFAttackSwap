@@ -3,7 +3,6 @@
 #include <string.h>
 #include <iostream>
 #include <vector>
-#include <string>
 #include <map>
 #include <time.h>
 #include <limits.h>
@@ -400,6 +399,8 @@ int run()
 
             }
 
+	    vector<bool> errorTuples = {};
+	    errorTuples.resize(n_sequence);
 	    // Validation of the groups of false positives
             for (int idx=0; idx<total_found; idx++){
 		vector<int> current_set = attack_set[idx];
@@ -430,13 +431,15 @@ int run()
 				if (!quiet) printf(", %u", current_set[j]);
 			}
 			if (!quiet) printf(".\n");
+			errorTuples[idx]=false;
 		}else{
 			printf("Error in tuple: %u, %u", current_set[0], current_set[1]);
 			for (int j=2;j<elements;j++){
 				printf(", %u", current_set[j]);
 			}
 			printf(". Check code.\n");
-			exit(1);
+			errorTuples[idx]=true;
+			//exit(1);
 		}
             }
 	    if(!quiet) fprintf(stderr, "\n");
@@ -445,6 +448,13 @@ int run()
             for (int idx=0; idx<total_found; idx++){
 		vector<int> current_set = attack_set[idx];
 		int elements = current_set.size();
+
+		if(errorTuples[idx]){
+			printf("%u;%u;%u;%u;%lf;0;%lf;2;%u;%u\n", num_way, num_cells, f, ht_size, calculated[idx],
+				       calculated[idx], elements, max_triggered);
+			continue;
+
+		}
 		if (!quiet) printf("Sequence %u with %u elements being reduced.\n", idx, elements);
 
 		vector<int> new_set(num_cells);
