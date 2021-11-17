@@ -25,6 +25,8 @@ int max_loop=2;    //num of trials
 int load_factor=95;    //load factor
 int bhs=2;
 
+float fraction_attack=1; // ratio of elements that are part of the attack 1=>100%
+
 int total_groups = 1; 
 
 int64_t tot_access=0;
@@ -552,16 +554,24 @@ int run()
 	    int queries = 0;
             int idx = 0;
             int seq_pos = 0;
+	    std::default_random_engine gener;
+	    std::binomial_distribution<int> disb(1,fraction_attack);
 	    while (queries<3000000){
-		if (idx==total_found){
-			idx =0;
-			seq_pos++;
+		int key = 0;
+		int attacking = disb(gener);
+		if (attacking){
+			if (idx==total_found){
+				idx =0;
+				seq_pos++;
+			}
+			if (seq_pos==n_sequence){
+				seq_pos=0;
+			}
+	    		vector<int> current_set = attack_set[idx];
+			key = current_set[seq_pos];
+		}else{
+			key= dis(gen);
 		}
-		if (seq_pos==n_sequence){
-			seq_pos=0;
-		}
-	    	vector<int> current_set = attack_set[idx];
-		int key = current_set[seq_pos];
 		clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
 		bool adapt = acf_cuckoo.check(key);
 		clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end);
@@ -569,13 +579,13 @@ int run()
 		double diff = (end.tv_sec - start.tv_sec) * 1000000000 + (end.tv_nsec - start.tv_nsec);
 		accum2 += diff;
 		queries++;
-		//seq_pos++;
-		idx++;
+		if(attacking){
+			idx++;
+		}
 	    }
 
 	    printf("%lf;%lf;%u;%u\n", accum, accum2, totalfpRan, totalfp);
 
-	    //Testing 1M random queries vs. 1M queries based on the attack set
 
         }// end main loop
             
@@ -596,6 +606,7 @@ void PrintUsage() {
    printf(" -n num_packets: number of packets for each flow \n");
    printf(" -S seed: select random seed (for debug)\n");
    printf(" -L load_factor : set the ACF load factor \n");
+   printf(" -a : fraction of elements corresponding to the attack \n");
    printf(" -p total_groups : max number of total groups of FP to be found \n");
    printf(" -v : verbose \n");
    printf(" -h print usage\n");
@@ -675,6 +686,11 @@ void init(int argc, char* argv[])
                     max_loop=atoi(argv[1]);
                     argc--;
                     break;
+               case 'a':
+		    flag=1;
+		    fraction_attack=atof(argv[1]);
+		    argc--;
+		    break;
                 case 'v':
                     printf("\nVerbose enabled\n");
                     verbose += 1;

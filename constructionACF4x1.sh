@@ -31,4 +31,31 @@
 ./acf4x1s_original -b 2 -m 262144 -f 10 -L 95 -p 1 -l 100 -q > logb2_m262144_f8_L95_100_orig
 ./acf4x1s_original -b 2 -m 1048576 -f 10 -L 95 -p 1 -l 100 -q > logb2_m1048576_f8_L95_100_orig
 
+./acf4x1s_original -b 2 -m 65536 -f 12 -L 95 -p 1 -l 100 -q > logb2_m65536_f10_L95_100_orig
+./acf4x1s_original -b 2 -m 65536 -f 14 -L 95 -p 1 -l 100 -q > logb2_m65536_f12_L95_100_orig
+
+./acf4x1s_effect -b 1 -m 65536 -f 7 -L 95 -p 1 -l 10 -q > adaptations_b1_m65536_f6_L95_100_a1 &
+./acf4x1s_effect -b 2 -m 65536 -f 8 -L 95 -p 1 -l 10 -q > adaptations_b2_m65536_f6_L95_100_a1 &
+./acf4x1s_effect -b 3 -m 65536 -f 9 -L 95 -p 1 -l 10 -q > adaptations_b3_m65536_f6_L95_100_a1 &
+./acf4x1s_effect -b 1 -m 65536 -f 7 -L 95 -p 10 -l 10 -q > adaptations_b1_m65536_f6_L95_100_a10 &
+./acf4x1s_effect -b 2 -m 65536 -f 8 -L 95 -p 10 -l 10 -q > adaptations_b2_m65536_f6_L95_100_a10 &
+./acf4x1s_effect -b 3 -m 65536 -f 9 -L 95 -p 10 -l 10 -q > adaptations_b3_m65536_f6_L95_100_a10 &
+./acf4x1s_effect -b 1 -m 65536 -f 9 -L 95 -p 1 -l 10 -q > adaptations_b1_m65536_f8_L95_100_a1 &
+./acf4x1s_effect -b 2 -m 65536 -f 10 -L 95 -p 1 -l 10 -q > adaptations_b2_m65536_f8_L95_100_a1 &
+./acf4x1s_effect -b 3 -m 65536 -f 11 -L 95 -p 1 -l 10 -q > adaptations_b3_m65536_f8_L95_100_a1 &
+./acf4x1s_effect -b 1 -m 65536 -f 9 -L 95 -p 10 -l 10 -q > adaptations_b1_m65536_f8_L95_100_a10 &
 ./acf4x1s_effect -b 2 -m 65536 -f 10 -L 95 -p 10 -l 10 -q > adaptations_b2_m65536_f8_L95_100_a10 &
+./acf4x1s_effect -b 3 -m 65536 -f 11 -L 95 -p 10 -l 10 -q > adaptations_b3_m65536_f8_L95_100_a10 &
+./acf4x1s_effect -b 1 -m 65536 -f 11 -L 95 -p 1 -l 10 -q > adaptations_b1_m65536_f10_L95_100_a1 &
+./acf4x1s_effect -b 2 -m 65536 -f 12 -L 95 -p 1 -l 10 -q > adaptations_b2_m65536_f10_L95_100_a1 &
+./acf4x1s_effect -b 3 -m 65536 -f 13 -L 95 -p 1 -l 10 -q > adaptations_b3_m65536_f10_L95_100_a1 &
+./acf4x1s_effect -b 1 -m 65536 -f 11 -L 95 -p 10 -l 10 -q > adaptations_b1_m65536_f10_L95_100_a10 &
+./acf4x1s_effect -b 2 -m 65536 -f 12 -L 95 -p 10 -l 10 -q > adaptations_b2_m65536_f10_L95_100_a10 &
+./acf4x1s_effect -b 3 -m 65536 -f 13 -L 95 -p 10 -l 10 -q > adaptations_b3_m65536_f10_L95_100_a10 &
+
+./acf4x1s_effect -b 2 -m 65536 -f 8 -L 95 -p 10 -l 10 -a 0.05 -q > adaptations_b2_m65536_f6_L95_100_a10_ap005 &
+./acf4x1s_effect -b 2 -m 65536 -f 8 -L 95 -p 10 -l 10 -a 0.1 -q > adaptations_b2_m65536_f6_L95_100_a10_ap01 &
+./acf4x1s_effect -b 2 -m 65536 -f 10 -L 95 -p 10 -l 10 -a 0.05 -q > adaptations_b2_m65536_f8_L95_100_a10_ap005 &
+./acf4x1s_effect -b 2 -m 65536 -f 10 -L 95 -p 10 -l 10 -a 0.1 -q > adaptations_b2_m65536_f8_L95_100_a10_ap01 &
+./acf4x1s_effect -b 2 -m 65536 -f 12 -L 95 -p 10 -l 10 -a 0.05 -q > adaptations_b2_m65536_f10_L95_100_a10_ap005 &
+./acf4x1s_effect -b 2 -m 65536 -f 12 -L 95 -p 10 -l 10 -a 0.1 -q > adaptations_b2_m65536_f10_L95_100_a10_ap01 &

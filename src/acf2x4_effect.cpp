@@ -25,6 +25,7 @@ int f=9; //# of fingerprint bits
 int max_loop=2;    //num of trials
 int load_factor=95;    //load factor
 
+float fraction_attack=1; // ratio of elements that are part of the attack 1=>100%
 
 int total_groups = 1;
 int64_t tot_access=0;
@@ -587,20 +588,28 @@ int run()
             int seq_pos = 0;
 	    vector<int> current_set = attack_set[0];
 	    int current_size = current_set.size();
+	    std::default_random_engine gener;
+	    std::binomial_distribution<int> disb(1,fraction_attack);
 	    while (queries<3000000){
-		if (seq_pos==current_size){
-			seq_pos=0;
-			idx=(idx==total_found-1)?0:idx+1;
-			current_set = attack_set[idx];
-			current_size = current_set.size();
+		int key=0;
+		int attacking = disb(gener);
+		if(attacking){
+			if (seq_pos==current_size){
+				seq_pos=0;
+				idx=(idx==total_found-1)?0:idx+1;
+				current_set = attack_set[idx];
+				current_size = current_set.size();
+			}
+			if (errorTuples[idx]){
+				idx=(idx==total_found-1)?0:idx+1;
+				current_set = attack_set[idx];
+				current_size = current_set.size();
+				continue;
+			}
+			key = current_set[seq_pos];
+		}else{
+			key= dis(gen);
 		}
-		if (errorTuples[idx]){
-			idx=(idx==total_found-1)?0:idx+1;
-			current_set = attack_set[idx];
-			current_size = current_set.size();
-			continue;
-		}
-		int key = current_set[seq_pos];
 		clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
 		bool adapt = acf_cuckoo.check(key);
 		clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end);
@@ -608,7 +617,9 @@ int run()
 		double diff = (end.tv_sec - start.tv_sec) * 1000000000 + (end.tv_nsec - start.tv_nsec);
 		accum2 += diff;
 		queries++;
-		seq_pos++;
+		if(attacking){
+			seq_pos++;
+		}
 	    }
 
 	    unsigned int totalfp2 = 0;
@@ -619,22 +630,28 @@ int run()
 	    current_set = reduced_attack_set[0];
 	    current_size = current_set.size();
 	    while (queries<3000000){
-		if (seq_pos==current_size){
-			seq_pos=0;
-			idx=(idx==total_found-1)?0:idx+1;
-			current_set = reduced_attack_set[idx];
-			current_size = current_set.size();
-		}
-		if (errorTuples[idx] || !reducedTuples[idx]){
-			idx=(idx==total_found-1)?0:idx+1;
-			current_set = reduced_attack_set[idx];
-			current_size = current_set.size();
-			if(total_found==1){
-				break;
+                int key=0;
+	        int attacking = disb(gener);
+	        if(attacking){
+			if (seq_pos==current_size){
+				seq_pos=0;
+				idx=(idx==total_found-1)?0:idx+1;
+				current_set = reduced_attack_set[idx];
+				current_size = current_set.size();
 			}
-			continue;
+			if (errorTuples[idx] || !reducedTuples[idx]){
+				idx=(idx==total_found-1)?0:idx+1;
+				current_set = reduced_attack_set[idx];
+				current_size = current_set.size();
+				if(total_found==1){
+					break;
+				}
+				continue;
+			}
+			key = current_set[seq_pos];
+		}else{
+			key= dis(gen);
 		}
-		int key = current_set[seq_pos];
 		clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
 		bool adapt = acf_cuckoo.check(key);
 		clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end);
@@ -642,7 +659,9 @@ int run()
 		double diff = (end.tv_sec - start.tv_sec) * 1000000000 + (end.tv_nsec - start.tv_nsec);
 		accum3 += diff;
 		queries++;
-		seq_pos++;
+		if(attacking){
+			seq_pos++;
+		}
 	    }
 
 	    printf("%lf;%lf;%lf;%u;%u;%u\n", accum, accum2, accum3, totalfpRan, totalfp, totalfp2);
@@ -661,6 +680,8 @@ void PrintUsage() {
    printf(" -a as_ratio: set the A/S ratio \n");
    printf(" -S seed: select random seed (for debug)\n");
    printf(" -L load_factor : set the ACF load factor \n");
+   printf(" -a : fraction of elements corresponding to the attack \n");
+   printf(" -p total_groups : max number of total groups of FP to be found \n");
    printf(" -v : verbose \n");
    printf(" -h print usage\n");
    printf(" -v verbose enabled\n");
@@ -724,6 +745,11 @@ void init(int argc, char* argv[])
                 case 'l':
                     flag=1;
                     max_loop=atoi(argv[1]);
+                    argc--;
+                    break;
+                case 'a':
+                    flag=1;
+                    fraction_attack=atof(argv[1]);
                     argc--;
                     break;
                 case 'v':
