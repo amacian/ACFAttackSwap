@@ -19,6 +19,9 @@
 ./acf2x4_force_swap -m 65536 -f 8 -L 95 -p 1 -l 100 -t 30 -q > log2x4_m65536_f8_L95_t30_100
 ./acf2x4_force_swap -m 65536 -f 8 -L 95 -p 1 -l 100 -t 50 -q > log2x4_m65536_f8_L95_t50_100
 ./acf2x4_force_swap -m 65536 -f 8 -L 95 -p 1 -l 100 -t 100 -q > log2x4_m65536_f8_L95_t100_100
+./acf2x4_force_swap -m 65536 -f 8 -L 95 -p 1 -l 100 -t 150 -q > log2x4_m65536_f8_L95_t150_100
+./acf2x4_force_swap -m 65536 -f 8 -L 95 -p 1 -l 100 -t 200 -q > log2x4_m65536_f8_L95_t200_100
+./acf2x4_force_swap -m 65536 -f 8 -L 95 -p 1 -l 100 -t 250 -q > log2x4_m65536_f8_L95_t200_100
 
 ./acf2x4_effect -m 65536 -f 6 -L 95 -p 1 -l 10 -t 300 -q > adaptation2x4_m65536_f6_L95_t300_10_a1
 ./acf2x4_effect -m 65536 -f 6 -L 95 -p 10 -l 10 -t 300 -q > adaptation2x4_m65536_f6_L95_t300_10_a10
