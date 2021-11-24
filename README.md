@@ -1,6 +1,7 @@
 # ACFAttackSwap
 This repository includes the code in C++ of the attacks to the Adaptive Cuckoo Filter by forcing a degradation due to continuous swapping of the hash functions in one or several buckets as used for the paper:
-P. Reviriego, A. Sánchez-Macian, S. Pontarelli, S. Liu and F. Lombardi, "Attacking Adaptive Cuckoo Filters: Too Much Adaptation Can Kill You", under submission to IEEE...
+
+P. Reviriego, A. Sánchez-Macian, S. Pontarelli, S. Liu and F. Lombardi, "Attacking Adaptive Cuckoo Filters: Too Much Adaptation Can Kill You", under submission to *IEEE Transactions on Network and Service Management*
 
 The code is based on the original one for ACF available at:
 https://github.com/pontarelli/ACF
