@@ -39,6 +39,15 @@ $ ./constructionACF2x4.sh
 ```
 $ ./constructionACF4x1.sh 
 ```
+
+3. constructionACF_non_exclusive.sh
+    Shell script to run the simulations for an ACF filter when sharing the filter with other users.
+    Three executables are run with different options: acf4x1s\_original, acf4x1s\_optimized and acf2x4\_force\_swap.
+    Option -e is used to insert random external queries between the attacker's ones.
+
+```
+$ ./constructionACF_non_exclusive.sh 
+```
 # Options and example
 
 The previous scripts use different options to run the files. To understand the meaning, some examples are included next.
