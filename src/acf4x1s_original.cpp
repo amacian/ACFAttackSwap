@@ -12,6 +12,7 @@
 bool quiet=false;
 //int verbose=0; // define the debug level
 int seed;
+int seed2;
 
 //d=4, b=1 (first variant)
 int num_way=4;      //# of ways (hash functions)
@@ -20,6 +21,8 @@ int ht_size=1024; //# of rows
 int f=9; //# of fingerprint bits
 int fbhs=9;
 int skewed=0;
+
+int ratio_external_attack=0; // Number of external queries for every attack query during the construction of the filter
 
 int max_loop=2;    //num of trials
 int load_factor=95;    //load factor
@@ -175,6 +178,16 @@ bool is_false_positive(ACF acf_cuckoo, int key, int n_sequence){
 	return false;
 }
 
+void insert_external_queries(ACF acf_cuckoo){
+    	std::mt19937 gen(seed2);
+    	std::uniform_int_distribution<> dis(1,INT_MAX);
+	// Run a number of external queries from other users between 2 attacker queries.
+	for (int e=0; e<ratio_external_attack; e++){
+          	unsigned int external_key = (unsigned int) dis(gen);
+		acf_cuckoo.check(external_key);
+	}
+}
+
 int run()
 {
     
@@ -319,10 +332,20 @@ int run()
 		for(int i=1; i<n_sequence; i++){
                		unsigned int triggering_key = (unsigned int) dis(gen);
 
+			// Clean victim key just in case an external query activated it.
+			acf_cuckoo.check(victim_key); 
+
+			// Run a number of external queries from other users between 2 attacker queries.
+			// They might activate the victim_key with some probability.
+			insert_external_queries(acf_cuckoo);
+
 			if(!is_false_positive(acf_cuckoo, triggering_key, n_sequence)){
 				i--;
                     		continue;
 			}
+
+			// Run a number of external queries from other users between any 2 attacker queries.
+			insert_external_queries(acf_cuckoo);
 
 			// When detecting it as a false_positive, we have swapped the fingerprint.
 			// We will now check if it triggered a false positive on victim_key,
@@ -331,6 +354,10 @@ int run()
 				// of the sequence, let's clean them before continue
 				for(int pos=n_sequence-i;pos<n_sequence;pos++){
 					int next_key = current_set[pos];
+					
+					// Run a number of external queries from other users between any 2 attacker queries.
+					insert_external_queries(acf_cuckoo);
+
 					acf_cuckoo.check(next_key); // trigger next key 
 				}
 				i--;
@@ -343,27 +370,44 @@ int run()
                         // sequence is triggered.
 			if (i>1 || n_sequence==2){
 
-				verprintf("Candidate for position %u found. Elements: %u triggered %u\n", (n_sequence-i-1), triggering_key, victim_key);
+				if(!quiet) printf("Candidate for position %u found. Elements: %u triggered %u\n", (n_sequence-i-1), triggering_key, victim_key);
 				verprintf("Checking for way-bucket\n");
 				int init_pos = n_sequence-i+1;
+
+				// Run a number of external queries from other users between any 2 attacker queries.
+				insert_external_queries(acf_cuckoo);
+
 				acf_cuckoo.check(victim_key); // victim_key is in position 
 
 				bool same_way_bucket = true;
 				int prev_key = victim_key;
 				for(int pos=init_pos;pos<n_sequence;pos++){
+					
+					// Run a number of external queries from other users between any 2 attacker queries.
+					insert_external_queries(acf_cuckoo);
+
 					int next_key = current_set[pos];
 					verprintf("Checking if %u triggered %u at position %u --> ", prev_key, next_key, pos);
+
 					if(!acf_cuckoo.check(next_key)){ // Not in the same bucket-way
 						verprintf("Failed\n");
 						same_way_bucket = false;
 						break;
 					}
 					verprintf("Checked\n");
+					
+					// Run a number of external queries from other users between any 2 attacker queries.
+					insert_external_queries(acf_cuckoo);
+
 					acf_cuckoo.check(next_key); // trigger next key 
 					prev_key = next_key;
 				}
 				if(same_way_bucket && i==(n_sequence-1)){ 
 					verprintf("Checking if last element %u triggered candidate %u --> ", prev_key, triggering_key);
+					
+					// Run a number of external queries from other users between any 2 attacker queries.
+					insert_external_queries(acf_cuckoo);
+					
 					//Once that we have swapped the fingerprint with the last key, 
 					// we have to check that the found key is now positive
 					// Otherwise, look for a different key
@@ -391,7 +435,7 @@ int run()
 			}
 			// Set key 2 in the previous position
 			current_set[n_sequence-i-1] = triggering_key;
-			verprintf("Element %u found. Elements: %u triggered %u. Iteration: %i; Total_it:%u\n", (n_sequence-i-1), triggering_key, victim_key, i, n_sequence-1);
+			if (!quiet) printf("Element %u found. Elements: %u triggered %u. Iteration: %i; Total_it:%u\n", (n_sequence-i-1), triggering_key, victim_key, i, n_sequence-1);
 			victim_key = triggering_key;
 		}
 		if (failed){
@@ -409,6 +453,8 @@ int run()
 	    // Validation of the groups of false positives
             for (int idx=0; idx<total_found; idx++){
 		vector<int> current_set = attack_set[idx];
+
+		// We will not include external queries in the validation as we are doing it from an algorithm perspective, not from the attacker's one.
 
 		//Force first elemtent of the sequence to be the next to return a false positive
 		for (int j=1;j<n_sequence;j++){
@@ -466,6 +512,7 @@ void PrintUsage() {
    printf(" -v : verbose \n");
    printf(" -h print usage\n");
    printf(" -v verbose enabled\n");
+   printf(" -e external queries per attacker query\n");
 }
 
 void init(int argc, char* argv[])
@@ -481,6 +528,7 @@ void init(int argc, char* argv[])
     print_hostname();
     print_command_line(argc,argv); //print the command line with the option
     seed=time(NULL);
+    seed2=seed/2;
     // Check for switches
     while (argc > 1 && argv[1][0] == '-'){
         argc--;
@@ -541,6 +589,11 @@ void init(int argc, char* argv[])
                     max_loop=atoi(argv[1]);
                     argc--;
                     break;
+                case 'e':
+                    flag=1;
+                    ratio_external_attack=atoi(argv[1]);
+                    argc--;
+		    break;
                 case 'v':
                     printf("\nVerbose enabled\n");
                     verbose += 1;
@@ -573,6 +626,7 @@ void init(int argc, char* argv[])
     printf("iterations: %d\n",max_loop);
     printf("max groups: %d\n",total_groups);
     printf("Load factor: %d\n",load_factor);
+    printf("Ratio external/attacker: %d\n",ratio_external_attack);
     printf("---------------------------\n");
 
 

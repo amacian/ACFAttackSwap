@@ -21,6 +21,8 @@ int f=9; //# of fingerprint bits
 int fbhs=9;
 int skewed=0;
 
+int ratio_external_attack=0; // Number of external queries for every attack query during the construction of the filter
+
 int max_loop=2;    //num of trials
 int load_factor=95;    //load factor
 int bhs=2;
@@ -175,6 +177,16 @@ bool is_false_positive(ACF acf_cuckoo, int key, int n_sequence){
 	return false;
 }
 
+void insert_external_queries(ACF acf_cuckoo){
+    	std::mt19937 gen(seed);
+    	std::uniform_int_distribution<> dis(1,INT_MAX);
+	// Run a number of external queries from other users between 2 attacker queries.
+	for (int e=0; e<ratio_external_attack; e++){
+          	unsigned int external_key = (unsigned int) dis(gen);
+		acf_cuckoo.check(external_key);
+	}
+}
+
 int run()
 {
     
@@ -319,6 +331,7 @@ int run()
 		unsigned int idx_positives = 0;
 		for(int i=1; i<n_sequence; i++){
                		unsigned int triggering_key;
+
 			if(i<3){
 				triggering_key = (unsigned int) dis(gen);
 			}else{
@@ -330,6 +343,10 @@ int run()
 				verprintf("Old positive: %u\n", triggering_key);
 			}
 
+			// Run a number of external queries from other users between 2 attacker queries.
+			// They might activate the victim_key with some probability.
+			insert_external_queries(acf_cuckoo);
+
 			if(!is_false_positive(acf_cuckoo, triggering_key, n_sequence)){
 				i--;
                     		continue;
@@ -339,6 +356,10 @@ int run()
 				positives.push_back(triggering_key);
 			}
 
+			// Run a number of external queries from other users between 2 attacker queries.
+			// They might activate the victim_key with some probability.
+			insert_external_queries(acf_cuckoo);
+
 			// When detecting it as a false_positive, we have swapped the fingerprint.
 			// We will now check if it triggered a false positive on victim_key,
 			if(!acf_cuckoo.check(victim_key)){ 
@@ -347,7 +368,17 @@ int run()
 				bool retrigger = false;
 				for(int pos=n_sequence-i;pos<n_sequence && !retrigger;pos++){
 					int next_key = current_set[pos];
+					
+					// Run a number of external queries from other users between 2 attacker queries.
+					// They might activate the victim_key with some probability.
+					insert_external_queries(acf_cuckoo);
+
 					if(acf_cuckoo.check(next_key)){} // trigger next key 
+					
+					// Run a number of external queries from other users between 2 attacker queries.
+					// They might activate the victim_key with some probability.
+					insert_external_queries(acf_cuckoo);
+
 					// We should be careful as one of these keys may be duplicated
 					// So we check every step to see if they retrigger the sequence.
 					if(acf_cuckoo.check(victim_key)){
@@ -366,6 +397,11 @@ int run()
 			}
 
 
+					
+			// Run a number of external queries from other users between 2 attacker queries.
+			// They might activate the victim_key with some probability.
+			insert_external_queries(acf_cuckoo);
+
 			if (victim_key!=(unsigned int)current_set[n_sequence-i+1] &&
 				acf_cuckoo.check(victim_key)){
 				// A chained trigger has been detected due to a self-trigger
@@ -380,10 +416,20 @@ int run()
 				verprintf("Candidate for position %u found. Elements: %u triggered %u\n", (n_sequence-i-1), triggering_key, victim_key);
 				verprintf("Checking for way-bucket\n");
 				int init_pos = n_sequence-i+1;
+					
+				// Run a number of external queries from other users between 2 attacker queries.
+				// They might activate the victim_key with some probability.
+				insert_external_queries(acf_cuckoo);
+
 				if(victim_key==(unsigned int)current_set[n_sequence-i+1] &&
 				   acf_cuckoo.check(victim_key)){
 					init_pos++;
 				}
+					
+				// Run a number of external queries from other users between 2 attacker queries.
+				// They might activate the victim_key with some probability.
+				insert_external_queries(acf_cuckoo);
+
 				if(acf_cuckoo.check(victim_key)){} // victim_key is in position 
 				bool same_way_bucket = true;
 				bool last_triggers_first = false;
@@ -391,6 +437,11 @@ int run()
 				for(int pos=init_pos;pos<n_sequence;pos++){
 					int next_key = current_set[pos];
 					verprintf("Checking if %u triggered %u at position %u --> ", prev_key, next_key, pos);
+					
+					// Run a number of external queries from other users between 2 attacker queries.
+					// They might activate the victim_key with some probability.
+					insert_external_queries(acf_cuckoo);
+
 					if(!acf_cuckoo.check(next_key)){ // Not in the same bucket-way
 						verprintf("Failed\n");
 						same_way_bucket = false;
@@ -403,6 +454,11 @@ int run()
 						pos++;
 						verprintf("Self-triggering: %u at position %u --> ", next_key, (last_triggers_first)?0:pos);
 					}
+					
+					// Run a number of external queries from other users between 2 attacker queries.
+					// They might activate the victim_key with some probability.
+					insert_external_queries(acf_cuckoo);
+
 					if(acf_cuckoo.check(next_key)){} // trigger next key 
 					prev_key = next_key;
 				}
@@ -520,6 +576,7 @@ void PrintUsage() {
    printf(" -v : verbose \n");
    printf(" -h print usage\n");
    printf(" -v verbose enabled\n");
+   printf(" -e external queries per attacker query\n");
 }
 
 void init(int argc, char* argv[])
@@ -595,6 +652,11 @@ void init(int argc, char* argv[])
                     max_loop=atoi(argv[1]);
                     argc--;
                     break;
+                case 'e':
+                    flag=1;
+                    ratio_external_attack=atoi(argv[1]);
+                    argc--;
+		    break;
                 case 'v':
                     printf("\nVerbose enabled\n");
                     verbose += 1;
@@ -627,6 +689,7 @@ void init(int argc, char* argv[])
     printf("iterations: %d\n",max_loop);
     printf("max groups: %d\n",total_groups);
     printf("Load factor: %d\n",load_factor);
+    printf("Ratio external/attacker: %d\n",ratio_external_attack);
     printf("---------------------------\n");
 
 

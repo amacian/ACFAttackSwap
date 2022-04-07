@@ -19,7 +19,7 @@ int num_cells=4;  //# of slots in a rows
 int ht_size=1024; //# of rows
 int f=9; //# of fingerprint bits
 
-
+int ratio_external_attack=0; // Number of external queries for every attack query during the construction of the filter
 
 int max_loop=2;    //num of trials
 int load_factor=95;    //load factor
@@ -186,7 +186,8 @@ int fact(int n){
 void pick_four(int configuration, vector<int> current_set, vector<int>* new_set){
 	int size = current_set.size();
 	verprintf("Configuration: %u\n",configuration);
-	if(configuration <= 1 || configuration>(fact(size)/144)){ //
+	//if(configuration <= 1 || configuration>(fact(size)/144)){ //
+	if(configuration <= 1 || configuration>(fact(size)/(24*fact(size-4)))){ //
 		std::copy(current_set.begin(), current_set.begin()+4, new_set->begin());
 	}
 	int config = 0;
@@ -209,6 +210,15 @@ void pick_four(int configuration, vector<int> current_set, vector<int>* new_set)
 	}
 }
 
+void insert_external_queries(ACF acf_cuckoo){
+    	std::mt19937 gen(seed);
+    	std::uniform_int_distribution<> dis(1,INT_MAX);
+	// Run a number of external queries from other users between 2 attacker queries.
+	for (int e=0; e<ratio_external_attack; e++){
+          	unsigned int external_key = (unsigned int) dis(gen);
+		acf_cuckoo.check(external_key);
+	}
+}
 
 int run()
 {
@@ -350,6 +360,9 @@ int run()
 		for(int i=1; i<n_sequence; i++){
                		unsigned int triggering_key = (unsigned int) dis(gen);
 
+			// When sharing the filter with other users
+			insert_external_queries(acf_cuckoo);
+
 			if(!is_false_positive(acf_cuckoo, triggering_key, n_sequence)){
 				i--;
                     		continue;
@@ -363,17 +376,21 @@ int run()
 			while(!end_trigger && triggered < max_triggered){
 				end_trigger=true;
 				for (int pos=0; pos<i;pos++){	
+					//
+					// When sharing the filter with other users
+					insert_external_queries(acf_cuckoo);
+
 					int victim_key = current_set[pos];
 					if(acf_cuckoo.check(victim_key)){ 
 						triggered++;
-						verprintf("Triggering with %u over %u\n", triggering_key, victim_key);
+						if(!quiet) printf("Triggering with %u over %u\n", triggering_key, victim_key);
 						end_trigger=false;
 					}
 				}
 			}
 			if (triggered>=std::min(i,2)){
 				current_set[i] = triggering_key;
-				verprintf("Element found. Element: %u triggered %u elements.\n", triggering_key, triggered);
+				if (!quiet) printf("Element found. Element: %u triggered %u elements.\n", triggering_key, triggered);
 
 			}else{
 				i--;
@@ -412,6 +429,8 @@ int run()
 		while (validation){
 			validation=false;
 			for (int j=0;j<elements;j++){
+				// We do not include external queries in the validation as we are just checking that they are correct for 
+				// algorithm validation purposes, not from the attacker's perspective.
 				if(acf_cuckoo.check(current_set[j])){
 					validation = true;
 					swaps++;
@@ -461,7 +480,8 @@ int run()
 
 		time_t starttime = time(NULL);
 		bool validation = true;
-		for (int config=0; config<(fact(elements)/144); config++){
+		for (int config=0; config<(fact(elements)/(24*fact(elements-4))); config++){
+		//for (int config=0; config<(fact(elements)/144); config++){
 			pick_four(config+1, current_set, &new_set);
 			if(!quiet){
 				printf("Tuple extracted: %u, %u", new_set[0], new_set[1]);
@@ -536,6 +556,7 @@ void PrintUsage() {
    printf(" -v : verbose \n");
    printf(" -h print usage\n");
    printf(" -v verbose enabled\n");
+   printf(" -e external queries per attacker query\n");
 }
 
 void init(int argc, char* argv[])
@@ -598,6 +619,11 @@ void init(int argc, char* argv[])
                     max_loop=atoi(argv[1]);
                     argc--;
                     break;
+                case 'e':
+                    flag=1;
+                    ratio_external_attack=atoi(argv[1]);
+                    argc--;
+                    break;		    
                 case 'v':
                     printf("\nVerbose enabled\n");
                     verbose += 1;
