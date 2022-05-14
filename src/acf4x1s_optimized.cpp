@@ -8,6 +8,9 @@
 #include <limits.h>
 #include <random> // http://en.cppreference.com/w/cpp/numeric/random
 #include <algorithm>
+#include <thread>
+#include <mutex>
+#include <pthread.h>
 
 bool quiet=false;
 //int verbose=0; // define the debug level
@@ -31,9 +34,15 @@ int total_groups = 1;
 
 int64_t tot_access=0;
 
+// side effect. just for debug
+int first_key = 0;
+int current_way = -1;
+int current_bucket = 0;
+
 map<int64_t,int> S_map;
 map<int64_t,int> A_map;
 
+std::mutex acf_check_mtx;
 
 //select the fingerprint function
 //                                        16-bhs  
@@ -64,6 +73,7 @@ class ACF
 	int num_cells=1;
 	int buckets=1024;
 	int skew=0;
+	bool external_can_check = false;
 
     public:
 	ACF(int nway, int ncells, int ht_size, int t, int f, int s, int skewed)
@@ -84,6 +94,7 @@ class ACF
 
 	void clear()
 	{
+		std::lock_guard<std::mutex> guard(acf_check_mtx);
            	cuckoo->clear();
             	for (int i = 0;  i <num_way;  i++) 
 		{
@@ -98,6 +109,7 @@ class ACF
 
 	bool insertBulk(map<int64_t,int> S_map)
 	{
+            std::lock_guard<std::mutex> guard(acf_check_mtx);
             for (auto x: S_map) {
                 if(!cuckoo->insert(x.first,x.second))
                 {
@@ -112,8 +124,12 @@ class ACF
 	    return true;
 	}
 
-	bool check(int key)
+	bool check_ext(int key, int thread)
 	{
+        	std::lock_guard<std::mutex> guard(acf_check_mtx);
+		if(!external_can_check){
+			printf("External disabled\n");
+		}
                 for (int i = 0; i < num_way; i++) {
                     int p = myhash<int64_t>(key, i, buckets);
                         int ii=pFF[i][p].first;
@@ -129,7 +145,49 @@ class ACF
 						pFF[i][p].first= (pFF[i][p].first +1) %(1<<bhs);
 
                     			pFF[i][p].second=fingerprint(key1,pFF[i][p].first,fbhs);
-					verprintf("Key %u Swapping [%u][%u], %u --> %u\n", key, i, p, ii, pFF[i][p].first);
+					if(!quiet){
+                                                if (current_way == -1 && key==first_key) {
+                                                        current_way = i;
+                                                        current_bucket=p;
+                                                }
+                                                if ((i==current_way && p==current_bucket) || (key==first_key) ){
+						       	printf("External %u: Key %u Swapping [%u][%u], %u --> %u\n", thread, key, i, p, ii, pFF[i][p].first);
+						}
+                                        }
+				}
+				return true;
+                        }
+                }
+		return false;
+	}
+
+	bool check(int key)
+	{
+        	std::lock_guard<std::mutex> guard(acf_check_mtx);
+                for (int i = 0; i < num_way; i++) {
+                    int p = myhash<int64_t>(key, i, buckets);
+                        int ii=pFF[i][p].first;
+                        if (fingerprint(key, ii, fbhs) == pFF[i][p].second) {
+                    		int64_t key1= cuckoo->get_key(i,0,p);
+				if (key != key1){ // False positive . Check and swap should be in a different thread.
+						  // Notice that it may be a true positive in other of the ways
+						  // Or false positive in more than one
+					// SWAP
+		    			if (skew>0) 
+						pFF[i][p].first= (pFF[i][p].first +1) %((1<<bhs)+1);
+                    			else
+						pFF[i][p].first= (pFF[i][p].first +1) %(1<<bhs);
+
+                    			pFF[i][p].second=fingerprint(key1,pFF[i][p].first,fbhs);
+					if(!quiet){
+                                                if (current_way == -1 && key==first_key) {
+                                                        current_way = i;
+                                                        current_bucket=p;
+                                                }
+                                                if ((i==current_way && p==current_bucket) || (key==first_key) ){
+						       	printf("Attacker: Key %u Swapping [%u][%u], %u --> %u\n", key, i, p, ii, pFF[i][p].first);
+						}
+                                        }
 				}
 				return true;
                         }
@@ -163,6 +221,10 @@ class ACF
 	{
 		cuckoo->stat();
 	}
+
+	void enable_external_checks(bool enable){
+		external_can_check = enable;
+	}
 };
 
 bool is_false_positive(ACF acf_cuckoo, int key, int n_sequence){
@@ -177,13 +239,21 @@ bool is_false_positive(ACF acf_cuckoo, int key, int n_sequence){
 	return false;
 }
 
-void insert_external_queries(ACF acf_cuckoo){
-    	std::mt19937 gen(seed);
-    	std::uniform_int_distribution<> dis(1,INT_MAX);
+void mutex_check(ACF acf_cuckoo, unsigned int key, int thread){
+	acf_cuckoo.check_ext(key, thread);
+}
+
+
+void thread_external_query(ACF acf_cuckoo, int thread){
+	int iseed=time(NULL)+thread;
+	srand(iseed);
+    
+    	std::mt19937 gen(iseed);
+	std::uniform_int_distribution<> dis(1,INT_MAX);
 	// Run a number of external queries from other users between 2 attacker queries.
-	for (int e=0; e<ratio_external_attack; e++){
-          	unsigned int external_key = (unsigned int) dis(gen);
-		acf_cuckoo.check(external_key);
+	while (true){
+		unsigned int external_key = (unsigned int) dis(gen);
+		mutex_check(acf_cuckoo, external_key, thread);
 	}
 }
 
@@ -231,14 +301,17 @@ int run()
 
 //main loop
 //
+    	bool threads_on = false;
         int num_fails=0;
         int64_t tot_i=(load_factor*acf_cuckoo.get_size())/100;
+	std::thread externalThreads[ratio_external_attack];
         for (int loop=0; loop<max_loop; loop++) {
             S_map.clear();
             A_map.clear();
             bool fail_insert=false;
 
             acf_cuckoo.clear();
+	    acf_cuckoo.enable_external_checks(false);
 
             for (int64_t i = 0;  i <tot_i;  i++)
             {
@@ -296,7 +369,19 @@ int run()
             //create and test the false positive sequences
             int n_sequence = 1<<bhs; 
 
-	    int max_tries = 1000;//n_sequence*1.5;//10;
+	    int max_tries = 2;//n_sequence*1.5;//10;
+
+	    acf_cuckoo.enable_external_checks(true);
+
+            // creating threads for external users and mutex
+	    if(!threads_on){
+	    	for (int th=0; th<ratio_external_attack; th++){
+		 	externalThreads[th]=std::thread(thread_external_query, std::ref(acf_cuckoo), th);
+			//externalThreads[th].detach();
+	    	}
+		threads_on = true;
+	    }
+
             while(total_found<total_groups){
     		time_t starttime = time(NULL);
                 unsigned int victim_key = (unsigned int) dis(gen);
@@ -317,7 +402,9 @@ int run()
 
                 //insert in A_map 
                 A_map[victim_key] = line++;
-                verprintf("insert key: %u \n", victim_key);
+                if(!quiet) printf("inserting key: %u \n", victim_key);
+		first_key = victim_key;
+		current_way = -1;
 
 		vector<int> current_set = {};
 		current_set.resize(n_sequence);
@@ -343,10 +430,6 @@ int run()
 				verprintf("Old positive: %u\n", triggering_key);
 			}
 
-			// Run a number of external queries from other users between 2 attacker queries.
-			// They might activate the victim_key with some probability.
-			insert_external_queries(acf_cuckoo);
-
 			if(!is_false_positive(acf_cuckoo, triggering_key, n_sequence)){
 				i--;
                     		continue;
@@ -356,10 +439,6 @@ int run()
 				positives.push_back(triggering_key);
 			}
 
-			// Run a number of external queries from other users between 2 attacker queries.
-			// They might activate the victim_key with some probability.
-			insert_external_queries(acf_cuckoo);
-
 			// When detecting it as a false_positive, we have swapped the fingerprint.
 			// We will now check if it triggered a false positive on victim_key,
 			if(!acf_cuckoo.check(victim_key)){ 
@@ -368,16 +447,9 @@ int run()
 				bool retrigger = false;
 				for(int pos=n_sequence-i;pos<n_sequence && !retrigger;pos++){
 					int next_key = current_set[pos];
-					
-					// Run a number of external queries from other users between 2 attacker queries.
-					// They might activate the victim_key with some probability.
-					insert_external_queries(acf_cuckoo);
 
 					if(acf_cuckoo.check(next_key)){} // trigger next key 
 					
-					// Run a number of external queries from other users between 2 attacker queries.
-					// They might activate the victim_key with some probability.
-					insert_external_queries(acf_cuckoo);
 
 					// We should be careful as one of these keys may be duplicated
 					// So we check every step to see if they retrigger the sequence.
@@ -397,10 +469,6 @@ int run()
 			}
 
 
-					
-			// Run a number of external queries from other users between 2 attacker queries.
-			// They might activate the victim_key with some probability.
-			insert_external_queries(acf_cuckoo);
 
 			if (victim_key!=(unsigned int)current_set[n_sequence-i+1] &&
 				acf_cuckoo.check(victim_key)){
@@ -413,22 +481,14 @@ int run()
                         // sequence is triggered.
 			if (i>1 || n_sequence==2){
 
-				verprintf("Candidate for position %u found. Elements: %u triggered %u\n", (n_sequence-i-1), triggering_key, victim_key);
+				if(!quiet) printf("Candidate for position %u found. Elements: %u triggered %u\n", (n_sequence-i-1), triggering_key, victim_key);
 				verprintf("Checking for way-bucket\n");
 				int init_pos = n_sequence-i+1;
-					
-				// Run a number of external queries from other users between 2 attacker queries.
-				// They might activate the victim_key with some probability.
-				insert_external_queries(acf_cuckoo);
 
 				if(victim_key==(unsigned int)current_set[n_sequence-i+1] &&
 				   acf_cuckoo.check(victim_key)){
 					init_pos++;
 				}
-					
-				// Run a number of external queries from other users between 2 attacker queries.
-				// They might activate the victim_key with some probability.
-				insert_external_queries(acf_cuckoo);
 
 				if(acf_cuckoo.check(victim_key)){} // victim_key is in position 
 				bool same_way_bucket = true;
@@ -437,10 +497,6 @@ int run()
 				for(int pos=init_pos;pos<n_sequence;pos++){
 					int next_key = current_set[pos];
 					verprintf("Checking if %u triggered %u at position %u --> ", prev_key, next_key, pos);
-					
-					// Run a number of external queries from other users between 2 attacker queries.
-					// They might activate the victim_key with some probability.
-					insert_external_queries(acf_cuckoo);
 
 					if(!acf_cuckoo.check(next_key)){ // Not in the same bucket-way
 						verprintf("Failed\n");
@@ -454,10 +510,6 @@ int run()
 						pos++;
 						verprintf("Self-triggering: %u at position %u --> ", next_key, (last_triggers_first)?0:pos);
 					}
-					
-					// Run a number of external queries from other users between 2 attacker queries.
-					// They might activate the victim_key with some probability.
-					insert_external_queries(acf_cuckoo);
 
 					if(acf_cuckoo.check(next_key)){} // trigger next key 
 					prev_key = next_key;
@@ -481,14 +533,7 @@ int run()
 						failed = true;
 						break;
 					}else{
-						verprintf("Tries %u vs. Max number of tries %u\n", tries, max_tries);
-						if(i==3){
-							//positives[idx_positives-1]=positives[idx_positives];
-							//idx_positives = 0;
-						}
-						/*for(int pos=n_sequence-i;pos<n_sequence;pos++){
-						//	while(acf_cuckoo.check(current_set[pos])){} // trigger next key 
-						}*/
+						if (!quiet) printf("Tries %u vs. Max number of tries %u\n", tries, max_tries);
 					}
 					tries++;
 					i--;
@@ -498,7 +543,7 @@ int run()
 			}
 			// Set key 2 in the previous position
 			current_set[n_sequence-i-1] = triggering_key;
-			verprintf("Element %u found. Elements: %u triggered %u. Iteration: %i; Total_it:%u\n", (n_sequence-i-1), triggering_key, victim_key, i, n_sequence-1);
+			if (!quiet) printf("Element %u found. Elements: %u triggered %u. Iteration: %i; Total_it:%u\n", (n_sequence-i-1), triggering_key, victim_key, i, n_sequence-1);
 			victim_key = triggering_key;
 			idx_positives = 0;
 		}

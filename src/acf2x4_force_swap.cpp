@@ -8,6 +8,9 @@
 #include <limits.h>
 #include <random> // http://en.cppreference.com/w/cpp/numeric/random
 #include <algorithm>
+#include <thread>
+#include <mutex>
+#include <pthread.h>
 
 bool quiet=false;
 //int verbose=0; // define the debug level
@@ -29,9 +32,16 @@ int total_groups = 1;
 int64_t tot_access=0;
 int max_triggered = 16;
 
+// side effect. just for debug
+int first_key = 0;
+int current_way = -1;
+int current_bucket = 0;
+
 map<int64_t,int> S_map;
 map<int64_t,int> A_map;
 
+
+std::mutex acf_check_mtx;
 
 
 int fingerprint(int64_t key,int index,int f) {
@@ -50,6 +60,7 @@ class ACF
 	int num_way=2;
 	int num_cells=4;
 	int buckets=1024;
+	bool external_can_check = false;
 
     public:
 	ACF(int nway, int ncells, int ht_size, int t, int f)
@@ -72,7 +83,10 @@ class ACF
 
 	void clear()
 	{
+        	std::lock_guard<std::mutex> guard(acf_check_mtx);
+		if(!quiet) printf("Clearing cuckoo table \n");
            	cuckoo->clear();
+		if(!quiet) printf("Clearing additional structure \n");
             	for (int i = 0;  i <num_way;  i++){
                 	for (int ii = 0;  ii <num_cells;  ii++){
                     		for (int iii = 0;  iii <ht_size;  iii++){
@@ -85,6 +99,7 @@ class ACF
 
 	bool insertBulk(map<int64_t,int> S_map)
 	{
+            std::lock_guard<std::mutex> guard(acf_check_mtx);
             for (auto x: S_map) {
                 if(!cuckoo->insert(x.first,x.second))
                 {
@@ -99,8 +114,59 @@ class ACF
 	    return true;
 	}
 
+
+	bool check_ext(int key, int thread){
+        	std::lock_guard<std::mutex> guard(acf_check_mtx);
+		if(!external_can_check){
+			if(!quiet) printf("External disabled\n");
+		}
+                for (int i = 0; i < num_way; i++) {
+                   	int p = hashg(key, i, buckets);
+			for (int ii = 0; ii < num_cells; ii++) {
+                        	if (fingerprint(key, ii, fbhs) == FF[i][ii][p]) {
+                    			int64_t key1= cuckoo->get_key(i,ii,p);
+					
+					if (key != key1){ // False positive . Check and swap should be in a different thread.
+						  // Notice that it may be a true positive in another of the ways
+						  // Or false positive in more than one
+						// SWAP
+						int value1 = cuckoo->query(key1);
+						int jj=ii;
+						while(jj==ii) jj=std::rand()%num_cells;
+						int64_t key2 = cuckoo->get_key(i,jj,p);
+						int value2 = cuckoo->query(key2);
+						if (!cuckoo->remove(key1)) {// false_ii is free
+				                        if (!quiet) printf("External: false_ii is free\n");
+                    				}
+                    				if (!cuckoo->remove(key2)) {// jj is free
+                        				FF[i][ii][p]=-1;
+                    				} else {
+                        				cuckoo->direct_insert(key2,value2,i,ii);
+                        				FF[i][ii][p]=fingerprint(key2,ii,fbhs);
+                    				}
+                    				cuckoo->direct_insert(key1,value1,i,jj);
+						if(!quiet){
+                                               		if (current_way == -1 && key==first_key) {
+                                               	       	 current_way = i;
+                                               	       	 current_bucket=p;
+                                               		}
+                                               		if ((i==current_way && p==current_bucket) || (key==first_key) ){
+								       	printf("External %u: Key %u Swapping [%u][%u][%u], %u --> %u\n", thread, key, i, ii, p, ii, jj);
+							}
+                                        	}
+                                                FF[i][jj][p]=fingerprint(key1,jj,fbhs);
+						//verprintf("Key %u Swapping [%u][%u][%u] --> %u to %u\n", key, i, ii, p, ii, jj);
+					}
+					return true;
+				}
+                        }
+                }
+		return false;
+	}
+
 	bool check(int key)
 	{
+        	std::lock_guard<std::mutex> guard(acf_check_mtx);
                 for (int i = 0; i < num_way; i++) {
                    	int p = hashg(key, i, buckets);
 			for (int ii = 0; ii < num_cells; ii++) {
@@ -126,8 +192,17 @@ class ACF
                         				FF[i][ii][p]=fingerprint(key2,ii,fbhs);
                     				}
                     				cuckoo->direct_insert(key1,value1,i,jj);
+						if(!quiet){
+                                               		if (current_way == -1 && key==first_key) {
+                                               	       	 current_way = i;
+                                               	       	 current_bucket=p;
+                                               		}
+                                               		if ((i==current_way && p==current_bucket) || (key==first_key) ){
+								       	printf("Attacker: Key %u Swapping [%u][%u][%u], %u --> %u\n", key, i, ii, p, ii, jj);
+							}
+                                        	}
                                                 FF[i][jj][p]=fingerprint(key1,jj,fbhs);
-						verprintf("Key %u Swapping [%u][%u][%u] --> %u to %u\n", key, i, ii, p, ii, jj);
+						//verprintf("Key %u Swapping [%u][%u][%u] --> %u to %u\n", key, i, ii, p, ii, jj);
 					}
 					return true;
 				}
@@ -164,6 +239,10 @@ class ACF
 		cuckoo->stat();
 	}
 
+	void enable_external_checks(bool enable){
+		external_can_check = enable;
+	}
+
 };
 
 bool is_false_positive(ACF acf_cuckoo, int key, int tables){
@@ -178,16 +257,33 @@ bool is_false_positive(ACF acf_cuckoo, int key, int tables){
 	return false;
 }
 
+void mutex_check(ACF acf_cuckoo, unsigned int key, int thread){
+	acf_cuckoo.check_ext(key, thread);
+}
+
+void thread_external_query(ACF acf_cuckoo, int thread){
+	int iseed=time(NULL)+thread;
+	srand(iseed);
+    
+    	std::mt19937 gen(iseed);
+	std::uniform_int_distribution<> dis(1,INT_MAX);
+	// Run a number of external queries from other users between 2 attacker queries.
+	while (true){
+		unsigned int external_key = (unsigned int) dis(gen);
+		mutex_check(acf_cuckoo, external_key, thread);
+	}
+}
+
+
 int fact(int n){
 	if(n<0){return -1;}
 	return (n==0)?1:fact(n-1)*n;
 }
 
-void pick_four(int configuration, vector<int> current_set, vector<int>* new_set){
+bool pick_four(int configuration, vector<int> current_set, vector<int>* new_set){
 	int size = current_set.size();
 	verprintf("Configuration: %u\n",configuration);
-	//if(configuration <= 1 || configuration>(fact(size)/144)){ //
-	if(configuration <= 1 || configuration>(fact(size)/(24*fact(size-4)))){ //
+	if(configuration <= 1){ 
 		std::copy(current_set.begin(), current_set.begin()+4, new_set->begin());
 	}
 	int config = 0;
@@ -202,22 +298,13 @@ void pick_four(int configuration, vector<int> current_set, vector<int>* new_set)
 						new_set->at(1)=current_set[j];
 						new_set->at(2)=current_set[k];
 						new_set->at(3)=current_set[m];
-						return;
+						return true;
 					}
 				}
 			}
 		}
 	}
-}
-
-void insert_external_queries(ACF acf_cuckoo){
-    	std::mt19937 gen(seed);
-    	std::uniform_int_distribution<> dis(1,INT_MAX);
-	// Run a number of external queries from other users between 2 attacker queries.
-	for (int e=0; e<ratio_external_attack; e++){
-          	unsigned int external_key = (unsigned int) dis(gen);
-		acf_cuckoo.check(external_key);
-	}
+	return false;
 }
 
 int run()
@@ -263,13 +350,16 @@ int run()
 
 //main loop
 //
+    	bool threads_on = false;
         int num_fails=0;
         int64_t tot_i=(load_factor*acf_cuckoo.get_size())/100;
+	std::thread externalThreads[ratio_external_attack];
         for (int loop=0; loop<max_loop; loop++) {
             S_map.clear();
             A_map.clear();
             bool fail_insert=false;
 
+	    acf_cuckoo.enable_external_checks(false);
 	    acf_cuckoo.clear();
 
             for (int64_t i = 0;  i <tot_i;  i++)
@@ -328,6 +418,17 @@ int run()
             //create and test the false positive sequences
             int n_sequence = 1<<num_cells*2; 
 
+	    acf_cuckoo.enable_external_checks(true);
+            // creating threads for external users and mutex
+	    if(!threads_on){
+	    	for (int th=0; th<ratio_external_attack; th++){
+		 	externalThreads[th]=std::thread(thread_external_query, std::ref(acf_cuckoo), th);
+			//externalThreads[th].detach();
+	    	}
+		threads_on = true;
+	    }
+
+
    	    while(total_found<total_groups){
 		time_t starttime = time(NULL);
                 unsigned int victim_key = (unsigned int) dis(gen);
@@ -348,20 +449,28 @@ int run()
 
 		//insert in A_map 
                 A_map[victim_key] = line++;
-                verprintf("insert false positive key: %u \n", victim_key);
+                if (!quiet) printf("inserting false positive key: %u \n", victim_key);
+		first_key=victim_key;
+		current_way=-1;
 
 		vector<int> current_set = {};
 		current_set.resize(n_sequence);
 		current_set[0]=victim_key;
 
+		// Activations per element in the set when finding elements
+		vector<short> activations = {};
+		activations.resize(n_sequence, 0);
+
 		if (!quiet) printf("Looking for sequence %u\n\n",(total_found+1));
 		bool failed = true;
+
+		int rr=-1; // To clean possible external false positives from the set using a Round Robin approach
 
 		for(int i=1; i<n_sequence; i++){
                		unsigned int triggering_key = (unsigned int) dis(gen);
 
-			// When sharing the filter with other users
-			insert_external_queries(acf_cuckoo);
+			rr = (rr+1)%i; // Index rr of the set that will be traverse using Round Robin
+			acf_cuckoo.check(current_set[rr]); // In each iteration, one of the elements of the sequence is cleaned to reduce activations by external users
 
 			if(!is_false_positive(acf_cuckoo, triggering_key, n_sequence)){
 				i--;
@@ -373,25 +482,40 @@ int run()
 			// We will now check if it triggered a false positive on any of the keys in the set,
 			int triggered = 0;
 			bool end_trigger = false;
+			vector<short> it_activ = {};
+			it_activ.resize(n_sequence, 0);
 			while(!end_trigger && triggered < max_triggered){
 				end_trigger=true;
 				for (int pos=0; pos<i;pos++){	
-					//
-					// When sharing the filter with other users
-					insert_external_queries(acf_cuckoo);
-
 					int victim_key = current_set[pos];
 					if(acf_cuckoo.check(victim_key)){ 
 						triggered++;
 						if(!quiet) printf("Triggering with %u over %u\n", triggering_key, victim_key);
+						it_activ[pos]++;
 						end_trigger=false;
 					}
 				}
 			}
-			if (triggered>=std::min(i,2)){
+			if (triggered>=std::min((int)ceil((double)i/10),2)){
 				current_set[i] = triggering_key;
 				if (!quiet) printf("Element found. Element: %u triggered %u elements.\n", triggering_key, triggered);
-
+				std::transform (activations.begin(), activations.end(), it_activ.begin(), activations.begin(), std::plus<int>());
+				int removed = 0;
+				if (i>10){
+					for (int k=i-1; k>=0; k--){
+						if (!quiet) printf("Accumulated activation for position: %u is %u.\n", k, activations[k]);
+						if (k<i/2 && activations[k]==0){
+							// Removing elements with 0 activations
+							if (!quiet) printf("Removing element %u from position: %u with activations %u.\n", current_set[k], k, activations[k]);
+							current_set.erase(current_set.begin()+k);
+							activations.erase(activations.begin()+k);
+							current_set.shrink_to_fit();
+							activations.shrink_to_fit();
+							removed++;
+						}
+					}
+				}
+				i = i-removed;
 			}else{
 				i--;
 				continue;
@@ -406,6 +530,19 @@ int run()
 		if (failed){
 			if (!quiet) printf("Retrying sequence %u.\n", total_found+1);
 		}else{
+			// Removing elements with 0 activations
+			int elements = current_set.size();
+			for (int aci=elements-1;aci>=0;aci--){
+				if (activations[aci]==0){
+					current_set.erase(current_set.begin()+aci);
+					activations.erase(activations.begin()+aci);
+				}
+			}
+			// new size.
+			elements = current_set.size();
+			for (int k=0; k<elements;k++){
+				if (!quiet) printf("Accumulated activation for position: %u is %u.\n", k, activations[k]);
+			}
 			attack_set[total_found]=current_set;
 			if (!quiet) printf("Sequence completed.\n\n");
 			time_t endtime = time(NULL);
@@ -434,6 +571,7 @@ int run()
 				if(acf_cuckoo.check(current_set[j])){
 					validation = true;
 					swaps++;
+					if (!quiet) printf("Element was swapped %u. Is swap %u.\n", current_set[j], swaps);
 					break;
 				} 
 			}
@@ -480,9 +618,8 @@ int run()
 
 		time_t starttime = time(NULL);
 		bool validation = true;
-		for (int config=0; config<(fact(elements)/(24*fact(elements-4))); config++){
-		//for (int config=0; config<(fact(elements)/144); config++){
-			pick_four(config+1, current_set, &new_set);
+		int config=0;
+		while(pick_four(config+1, current_set, &new_set)){
 			if(!quiet){
 				printf("Tuple extracted: %u, %u", new_set[0], new_set[1]);
 				for (int j=2;j<num_cells;j++){
@@ -509,11 +646,15 @@ int run()
 				if (!quiet) printf("Validated in configuration: %u, %u\n", config+1, (fact(elements)/fact(num_cells)));
 				break;
 			}
+			config++;
 		}
 
 
 		time_t endtime = time(NULL);
 		double second = difftime(endtime,starttime);
+
+		// Disable external checks
+	        acf_cuckoo.enable_external_checks(false);
 
 		if(validation){
 			printf("%u;%u;%u;%u;%lf;%lf;%lf;0;%u;%u\n", num_way, num_cells, f, ht_size, calculated[idx],
