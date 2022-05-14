@@ -518,12 +518,12 @@ int run()
 
 						victim_key = current_set[n_sequence-i+1-last_element_correction];
 						if (!quiet)  {
-							printf("Max number of tries completed. Dropping element %u. Victim key now: %u\n\n", (n_sequence-i+last_element_correction), victim_key);
+							printf("Max number of tries completed. Dropping element %u. Victim key now: %u\n\n", (n_sequence-i-last_element_correction), victim_key);
 							for (int ax = 0; ax<i; ax++){
 								printf("The confidence for %u is %u\n", ax, current_weight[ax]);
 							}
 						}
-						current_weight[n_sequence-i+last_element_correction]=0;
+						current_weight[n_sequence-i-last_element_correction]=0;
 						//failed = true;
 						tries=1;
 						i=i-2+last_element_correction;
